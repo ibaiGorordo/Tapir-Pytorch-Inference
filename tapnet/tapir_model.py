@@ -18,6 +18,7 @@
 import functools
 from typing import Any, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
+import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -72,6 +73,7 @@ class TAPIR(nn.Module):
     def __init__(
             self,
             bilinear_interp_with_depthwise_conv: bool = False,
+            input_resolution: Tuple[int, int] = (256, 256),
             num_pips_iter: int = 4,
             pyramid_level: int = 1,
             mixer_hidden_dim: int = 512,
@@ -210,7 +212,6 @@ class TAPIR(nn.Module):
 
     def get_query_features(
             self,
-            video: torch.Tensor,
             query_points: torch.Tensor,
             feature_grids: FeatureGrids,
             refinement_resolutions: Optional[List[Tuple[int, int]]] = None,
@@ -218,7 +219,6 @@ class TAPIR(nn.Module):
         """Computes query features, which can be used for estimate_trajectories.
 
         Args:
-          video: A 5-D tensor representing a batch of sequences of images.
           is_training: Whether we are training.
           query_points: The query points for which we compute tracks.
           feature_grids: If passed, we'll use these feature grids rather than
@@ -238,7 +238,6 @@ class TAPIR(nn.Module):
         print(feature_grid[0].shape)
         resize_im_shape = feature_grids.resolutions
 
-        shape = video.shape
         # shape is [batch_size, time, height, width, channels]; conversion needs
         # [time, width, height]
         query_feats = []
@@ -246,13 +245,13 @@ class TAPIR(nn.Module):
         for i, resolution in enumerate(resize_im_shape):
             position_in_grid = utils.convert_grid_coordinates(
                 query_points,
-                shape[:3],
+                torch.tensor([1,resolution[0], resolution[1]]).to(query_points.device),
                 feature_grid[i].shape[1:4],
                 coordinate_format='tyx',
             )
             position_in_grid_hires = utils.convert_grid_coordinates(
                 query_points,
-                shape[:3],
+                torch.tensor([1,resolution[0], resolution[1]]).to(query_points.device),
                 hires_feats[i].shape[1:4],
                 coordinate_format='tyx',
             )
@@ -273,13 +272,13 @@ class TAPIR(nn.Module):
 
     def get_feature_grids(
             self,
-            video: torch.Tensor,
+            frame: torch.Tensor,
             refinement_resolutions: Optional[List[Tuple[int, int]]] = None,
     ) -> FeatureGrids:
         """Computes feature grids.
 
         Args:
-          video: A 5-D tensor representing a batch of sequences of images.
+          frame: A 4-D tensor representing an image
           is_training: Whether we are training.
           refinement_resolutions: A list of (height, width) tuples. Refinement will
             be repeated at each specified resolution, to achieve high accuracy on
@@ -303,10 +302,9 @@ class TAPIR(nn.Module):
             if resolution[0] % 8 != 0 or resolution[1] % 8 != 0:
                 raise ValueError('Image resolution must be a multiple of 8.')
 
-            n, h, w, c = video.shape
-            video_input = video.permute(0, 3, 1, 2)
+            _, c, h, w = frame.shape
 
-            resnet_out = self.resnet_torch(video_input)
+            resnet_out = self.resnet_torch(frame)
             latent = resnet_out['resnet_unit_3'].permute(0, 2, 3, 1)
             hires = resnet_out['resnet_unit_1'].permute(0, 2, 3, 1)
 
@@ -325,8 +323,8 @@ class TAPIR(nn.Module):
                 )
             )
 
-            latent = latent.view(n, 1, *latent.shape[1:])
-            hires = hires.view(n, 1, *hires.shape[1:])
+            latent = latent.view(1, 1, *latent.shape[1:])
+            hires = hires.view(1, 1, *hires.shape[1:])
 
             feature_grid.append(latent)
             hires_feats.append(hires)

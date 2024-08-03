@@ -27,14 +27,16 @@ def draw_points(frame, points, visible, colors):
 
 def preprocess_frame(frame, resize=(256, 256)):
 
-    cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    frame = cv2.resize(frame, resize)
-    frame = frame[np.newaxis, :, :, :].astype(np.float32)
+    input = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    input = cv2.resize(input, resize)
+    input = input[np.newaxis, :, :, :].astype(np.float32)
 
-    frame = torch.tensor(frame).to(device)
-    frame = frame.float()
-    frame = frame / 255 * 2 - 1
-    return frame
+    input = torch.tensor(input).to(device)
+    input = input.float()
+    input = input / 255 * 2 - 1
+    input = input.permute(0, 3, 1, 2)
+
+    return input
 
 def sample_random_points(frame_max_idx, height, width, num_points):
     """Sample random points with (time, height, width) order."""
@@ -58,7 +60,6 @@ def online_model_init(frame, query_points):
     frame = preprocess_frame(frame, resize=(resize_height, resize_width))
     feature_grids = model.get_feature_grids(frame)
     query_features = model.get_query_features(
-        frame,
         query_points=query_points,
         feature_grids=feature_grids,
     )
@@ -90,8 +91,11 @@ def online_model_predict(frame, query_features, causal_context):
     return tracks, visibles, causal_context
 
 if __name__ == '__main__':
+    resize_height = 256
+    resize_width = 256
+    num_points = 256
 
-    model = tapir_model.TAPIR(pyramid_level=1, use_casual_conv=True)
+    model = tapir_model.TAPIR(pyramid_level=1, use_casual_conv=True, initial_resolution=(resize_height, resize_width))
     model.load_state_dict(torch.load('causal_bootstapir_checkpoint.pt'))
     model = model.to(device)
     model = model.eval()
@@ -100,27 +104,20 @@ if __name__ == '__main__':
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    resize_height = 256
-    resize_width = 256
-    num_points = 256
-
     query_points = sample_random_points(0, resize_height, resize_width, num_points)
     query_points = torch.tensor(query_points).to(device)
     point_colors = np.random.randint(0, 255, (num_points, 3))
 
     # Initialize query features
     ret, frame = cap.read()
-    query_features = online_model_init(frame,
-                                       query_points[None])
+    query_features = online_model_init(frame, query_points[None])
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
-    causal_state = model.construct_initial_causal_state(query_points.shape[0],
-                                                        len(query_features.resolutions) - 1)
+    causal_state = model.construct_initial_causal_state(query_points.shape[0], len(query_features.resolutions) - 1)
     for i in range(len(causal_state)):
         for k, v in causal_state[i].items():
             causal_state[i][k] = v.to(device)
-
 
     predictions = []
     frames = []
@@ -130,11 +127,8 @@ if __name__ == '__main__':
             break
 
         # Note: we add a batch dimension.
-        tracks, visibles, causal_state = online_model_predict(
-            frame=frame,
-            query_features=query_features,
-            causal_context=causal_state,
-        )
+        tracks, visibles, causal_state = online_model_predict(frame=frame, query_features=query_features, causal_context=causal_state)
+
         frames.append(frame)
         predictions.append({'tracks': tracks, 'visibles': visibles})
 
