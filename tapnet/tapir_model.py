@@ -32,17 +32,13 @@ class TAPIR(nn.Module):
     def __init__(
             self,
             bilinear_interp_with_depthwise_conv: bool = False,
-            input_resolution: Tuple[int, int] = (256, 256),
             num_pips_iter: int = 4,
             pyramid_level: int = 1,
-            mixer_hidden_dim: int = 512,
             num_mixer_blocks: int = 12,
-            mixer_kernel_shape: int = 3,
             patch_size: int = 7,
             softmax_temperature: float = 20.0,
             parallelize_query_extraction: bool = False,
             initial_resolution: Tuple[int, int] = (256, 256),
-            blocks_per_group: Sequence[int] = (2, 2, 2, 2),
             feature_extractor_chunk_size: int = 10,
             extra_convs: bool = True,
             use_casual_conv: bool = False,
@@ -99,15 +95,15 @@ class TAPIR(nn.Module):
     def get_query_features(
             self,
             query_points: torch.Tensor,
-            feature_grid: list[torch.Tensor],
-            hires_feats: list[torch.Tensor],
-    ) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+            feature_grid: torch.Tensor,
+            hires_feats_grid: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Computes query features, which can be used for estimate_trajectories.
 
         Args:
           is_training: Whether we are training.
           query_points: The query points for which we compute tracks.
-          feature_grids: If passed, we'll use these feature grids rather than
+          hires_feats_grid: If passed, we'll use these feature grids rather than
             computing new ones.
           refinement_resolutions: A list of (height, width) tuples.  Refinement will
             be repeated at each specified resolution, in order to achieve high
@@ -121,38 +117,32 @@ class TAPIR(nn.Module):
         """
         # shape is [batch_size, time, height, width, channels]; conversion needs
         # [time, width, height]
-        query_feats = []
-        hires_query_feats = []
-        for i in range(len(feature_grid)):
-            position_in_grid = utils.convert_grid_coordinates(
-                query_points,
-                torch.tensor([1,self.initial_resolution[0], self.initial_resolution[1]]).to(query_points.device),
-                feature_grid[i].shape[1:4],
-                coordinate_format='tyx',
-            )
-            position_in_grid_hires = utils.convert_grid_coordinates(
-                query_points,
-                torch.tensor([1,self.initial_resolution[0], self.initial_resolution[1]]).to(query_points.device),
-                hires_feats[i].shape[1:4],
-                coordinate_format='tyx',
-            )
 
-            interp_features = utils.map_coordinates_3d(
-                feature_grid[i], position_in_grid
-            )
-            hires_interp = utils.map_coordinates_3d(
-                hires_feats[i], position_in_grid_hires
-            )
+        position_in_grid = utils.convert_grid_coordinates(
+            query_points,
+            torch.tensor([1,self.initial_resolution[0], self.initial_resolution[1]]).to(query_points.device),
+            feature_grid.shape[1:4],
+            coordinate_format='tyx',
+        )
+        position_in_grid_hires = utils.convert_grid_coordinates(
+            query_points,
+            torch.tensor([1,self.initial_resolution[0], self.initial_resolution[1]]).to(query_points.device),
+            hires_feats_grid.shape[1:4],
+            coordinate_format='tyx',
+        )
 
-            hires_query_feats.append(hires_interp)
-            query_feats.append(interp_features)
-
+        query_feats = utils.map_coordinates_3d(
+            feature_grid, position_in_grid
+        )
+        hires_query_feats = utils.map_coordinates_3d(
+            hires_feats_grid, position_in_grid_hires
+        )
         return query_feats, hires_query_feats
 
     def get_feature_grids(
             self,
             frame: torch.Tensor,
-    ) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Computes feature grids.
 
         Args:
@@ -164,52 +154,36 @@ class TAPIR(nn.Module):
             hires_feats: A list of high-resolution feature grids, one for each
                 resolution.
         """
-        feature_grid = []
-        hires_feats = []
+        resnet_out = self.resnet_torch(frame)
+        latent = resnet_out['resnet_unit_3'].permute(0, 2, 3, 1)
+        hires = resnet_out['resnet_unit_1'].permute(0, 2, 3, 1)
 
-        all_required_resolutions = [self.initial_resolution, self.initial_resolution]
-
-        for resolution in all_required_resolutions:
-
-            if resolution[0] % 8 != 0 or resolution[1] % 8 != 0:
-                raise ValueError('Image resolution must be a multiple of 8.')
-
-            resnet_out = self.resnet_torch(frame)
-            latent = resnet_out['resnet_unit_3'].permute(0, 2, 3, 1)
-            hires = resnet_out['resnet_unit_1'].permute(0, 2, 3, 1)
-
-            latent = self.extra_convs(latent)
-
-            latent = latent / torch.sqrt(
-                torch.maximum(
-                    torch.sum(torch.square(latent), axis=-1, keepdims=True),
-                    torch.tensor(1e-12, device=latent.device),
-                )
+        latent = self.extra_convs(latent)
+        latent = latent / torch.sqrt(
+            torch.maximum(
+                torch.sum(torch.square(latent), dim=-1, keepdim=True),
+                torch.tensor(1e-12, device=latent.device),
             )
-            hires = hires / torch.sqrt(
-                torch.maximum(
-                    torch.sum(torch.square(hires), axis=-1, keepdims=True),
-                    torch.tensor(1e-12, device=hires.device),
-                )
+        )
+        hires = hires / torch.sqrt(
+            torch.maximum(
+                torch.sum(torch.square(hires), dim=-1, keepdim=True),
+                torch.tensor(1e-12, device=hires.device),
             )
+        )
 
-            latent = latent.view(1, 1, *latent.shape[1:])
-            hires = hires.view(1, 1, *hires.shape[1:])
+        feature_grid = latent.view(1, 1, *latent.shape[1:])
+        hires_feats_grid = hires.view(1, 1, *hires.shape[1:])
 
-            print(latent.shape, hires.shape)
-
-            feature_grid.append(latent)
-            hires_feats.append(hires)
-
-        return feature_grid, hires_feats
+        return feature_grid, hires_feats_grid
 
     def estimate_trajectories(
             self,
             video_size: Tuple[int, int],
-            feature_grid: list[torch.Tensor],
-            hires_feats: list[torch.Tensor],
-            query_feats: list[torch.Tensor],
-            hires_query_feats: list[torch.Tensor],
+            feature_grid: torch.Tensor,
+            hires_feats_grid: torch.Tensor,
+            query_feats: torch.Tensor,
+            hires_query_feats: torch.Tensor,
             query_chunk_size: Optional[int] = None,
             causal_context: Optional[dict[str, torch.Tensor]] = None,
             get_causal_context: bool = False,
@@ -255,7 +229,7 @@ class TAPIR(nn.Module):
         pts_iters = []
         expd_iters = []
         new_causal_context = []
-        num_iters = self.num_pips_iter * (len(feature_grid) - 1)
+        num_iters = self.num_pips_iter
         for _ in range(num_iters + 1):
             occ_iters.append([])
             pts_iters.append([])
@@ -265,12 +239,12 @@ class TAPIR(nn.Module):
 
         infer = functools.partial(
             self.tracks_from_cost_volume,
-            im_shp=feature_grid[0].shape[0:2]
+            im_shp=feature_grid.shape[0:2]
                    + self.initial_resolution
                    + (3,),
         )
 
-        num_queries = query_feats[0].shape[1]
+        num_queries = query_feats.shape[1]
         perm = torch.arange(num_queries)
 
         inv_perm = torch.zeros_like(perm)
@@ -278,7 +252,7 @@ class TAPIR(nn.Module):
 
         for ch in range(0, num_queries, query_chunk_size):
             perm_chunk = perm[ch: ch + query_chunk_size]
-            chunk = query_feats[0][:, perm_chunk]
+            chunk = query_feats[:, perm_chunk]
 
             cc_chunk = []
             for d in range(len(causal_context)):
@@ -290,7 +264,7 @@ class TAPIR(nn.Module):
             infer_query_points = None
             points, occlusion, expected_dist = infer(
                 chunk,
-                feature_grid[0],
+                feature_grid,
                 infer_query_points,
             )
             pts_iters[0].append(train2orig(points))
@@ -301,14 +275,14 @@ class TAPIR(nn.Module):
             for i in range(num_iters):
                 feature_level = i // self.num_pips_iter + 1
                 queries = [
-                    hires_query_feats[feature_level][:, perm_chunk],
-                    query_feats[feature_level][:, perm_chunk],
+                    hires_query_feats[:, perm_chunk],
+                    query_feats[:, perm_chunk],
                 ]
                 for _ in range(self.pyramid_level):
                     queries.append(queries[-1])
                 pyramid = [
-                    hires_feats[feature_level],
-                    feature_grid[feature_level],
+                    hires_feats_grid,
+                    feature_grid,
                 ]
                 for _ in range(self.pyramid_level):
                     pyramid.append(
