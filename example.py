@@ -58,23 +58,26 @@ def postprocess_occlusions(occlusions, expected_dist):
 def online_model_init(frame, query_points):
     """Initialize query features for the query points."""
     frame = preprocess_frame(frame, resize=(resize_height, resize_width))
-    feature_grids = model.get_feature_grids(frame)
-    query_features = model.get_query_features(
+    feature_grid, hires_feats = model.get_feature_grids(frame)
+    query_feats, hires_query_feats = model.get_query_features(
         query_points=query_points,
-        feature_grids=feature_grids,
+        feature_grid=feature_grid,
+        hires_feats=hires_feats,
     )
-    return query_features
+    return query_feats, hires_query_feats
 
 
 @torch.inference_mode()
-def online_model_predict(frame, query_features, causal_context):
+def online_model_predict(frame, query_feats, hires_query_feats, causal_context):
     """Compute point tracks and occlusions given frame and query points."""
     frame = preprocess_frame(frame, resize=(resize_height, resize_width))
-    feature_grids = model.get_feature_grids(frame)
+    feature_grid, hires_feats = model.get_feature_grids(frame)
     trajectories = model.estimate_trajectories(
         (resize_height, resize_width),
-        feature_grids=feature_grids,
-        query_features=query_features,
+        feature_grid=feature_grid,
+        hires_feats=hires_feats,
+        query_feats=query_feats,
+        hires_query_feats=hires_query_feats,
         query_chunk_size=64,
         causal_context=causal_context,
         get_causal_context=True,
@@ -110,11 +113,11 @@ if __name__ == '__main__':
 
     # Initialize query features
     ret, frame = cap.read()
-    query_features = online_model_init(frame, query_points[None])
+    query_feats, hires_query_feats = online_model_init(frame, query_points[None])
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
-    causal_state = model.construct_initial_causal_state(query_points.shape[0], len(query_features.resolutions) - 1)
+    causal_state = model.construct_initial_causal_state(query_points.shape[0], len(query_feats) - 1)
     for i in range(len(causal_state)):
         for k, v in causal_state[i].items():
             causal_state[i][k] = v.to(device)
@@ -127,7 +130,7 @@ if __name__ == '__main__':
             break
 
         # Note: we add a batch dimension.
-        tracks, visibles, causal_state = online_model_predict(frame=frame, query_features=query_features, causal_context=causal_state)
+        tracks, visibles, causal_state = online_model_predict(frame=frame, query_feats=query_feats, hires_query_feats=hires_query_feats, causal_context=causal_state)
 
         frames.append(frame)
         predictions.append({'tracks': tracks, 'visibles': visibles})
