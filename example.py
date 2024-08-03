@@ -11,6 +11,19 @@ if torch.cuda.is_available():
 else:
     device = torch.device('cpu')
 
+def draw_points(frame, points, visible, colors):
+    for i in range(points.shape[0]):
+        if not visible[i]:
+            continue
+
+        point = points[i,:]
+        color = colors[i,:]
+        cv2.circle(frame,
+                   (int(point[0]), int(point[1])),
+                   5,
+                   (int(color[0]), int(color[1]), int(color[2])),
+                   -1)
+    return frame
 
 def preprocess_frame(frame, resize=(256, 256)):
 
@@ -52,12 +65,13 @@ def online_model_init(frame, query_points):
     return query_features
 
 
+@torch.inference_mode()
 def online_model_predict(frame, query_features, causal_context):
     """Compute point tracks and occlusions given frame and query points."""
     frame = preprocess_frame(frame, resize=(resize_height, resize_width))
     feature_grids = model.get_feature_grids(frame)
     trajectories = model.estimate_trajectories(
-        frame.shape[-3:-1],
+        (resize_height, resize_width),
         feature_grids=feature_grids,
         query_features=query_features,
         query_chunk_size=64,
@@ -75,55 +89,41 @@ def online_model_predict(frame, query_features, causal_context):
     visibles = postprocess_occlusions(occlusions, uncertainty)
     return tracks, visibles, causal_context
 
-def draw_points(frame, points, visible, colors):
-    for i in range(points.shape[0]):
-        if not visible[i]:
-            continue
+if __name__ == '__main__':
 
-        point = points[i,:]
-        color = colors[i,:]
-        cv2.circle(frame,
-                   (int(point[0]), int(point[1])),
-                   5,
-                   (int(color[0]), int(color[1]), int(color[2])),
-                   -1)
-    return frame
+    model = tapir_model.TAPIR(pyramid_level=1, use_casual_conv=True)
+    model.load_state_dict(torch.load('causal_bootstapir_checkpoint.pt'))
+    model = model.to(device)
+    model = model.eval()
 
-model = tapir_model.TAPIR(pyramid_level=1, use_casual_conv=True)
-model.load_state_dict(torch.load('causal_bootstapir_checkpoint.pt'))
-model = model.to(device)
-model = model.eval()
+    cap = cv2.VideoCapture('horsejump-high.mp4')
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-cap = cv2.VideoCapture('horsejump-high.mp4')
-width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    resize_height = 256
+    resize_width = 256
+    num_points = 256
 
-resize_height = 256
-resize_width = 256
-num_points = 256
+    query_points = sample_random_points(0, resize_height, resize_width, num_points)
+    query_points = torch.tensor(query_points).to(device)
+    point_colors = np.random.randint(0, 255, (num_points, 3))
 
-query_points = sample_random_points(0, resize_height, resize_width, num_points)
-query_points = torch.tensor(query_points).to(device)
-point_colors = np.random.randint(0, 255, (num_points, 3))
+    # Initialize query features
+    ret, frame = cap.read()
+    query_features = online_model_init(frame,
+                                       query_points[None])
 
-# Initialize query features
-ret, frame = cap.read()
-query_features = online_model_init(frame,
-                                   query_points[None])
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
-cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-
-causal_state = model.construct_initial_causal_state(query_points.shape[0],
-                                                    len(query_features.resolutions) - 1)
-for i in range(len(causal_state)):
-    for k, v in causal_state[i].items():
-        causal_state[i][k] = v.to(device)
+    causal_state = model.construct_initial_causal_state(query_points.shape[0],
+                                                        len(query_features.resolutions) - 1)
+    for i in range(len(causal_state)):
+        for k, v in causal_state[i].items():
+            causal_state[i][k] = v.to(device)
 
 
-predictions = []
-frames = []
-with torch.no_grad():
-
+    predictions = []
+    frames = []
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
