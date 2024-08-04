@@ -114,6 +114,8 @@ class PIPsConvBlock(nn.Module):
         self.use_causal_conv = use_causal_conv
         self.block_name = f'block_{block_idx}'
         self.kernel_shape = kernel_shape
+        self.step1_size = 512
+        self.step2_size = 2048
 
         self.layer_norm = nn.LayerNorm(
             normalized_shape=in_channels, elementwise_affine=True, bias=False
@@ -143,23 +145,17 @@ class PIPsConvBlock(nn.Module):
     def forward(self, x, causal_context):
         to_skip = x
         x = self.layer_norm(x)
-        new_causal_context = {}
-
-        name1 = self.block_name + '_causal_1'
-        x = torch.cat([causal_context[name1], x], dim=-2)
-        new_causal_context[name1] = x[..., -(self.kernel_shape - 1):, :]
-
+        x = torch.cat([causal_context[...,:self.step1_size], x], dim=-2)
+        new_causal_context = x[..., -(self.kernel_shape - 1):, :]
         x = x.permute(0, 2, 1)
         x = F.pad(x, (2, 0))
         x = self.mlp1_up(x)
-
         x = F.gelu(x, approximate='tanh')
 
         x = x.permute(0, 2, 1)
-        name2 = self.block_name + '_causal_2'
-        num_extra = causal_context[name2].shape[-2]
-        x = torch.cat([causal_context[name2], x[..., num_extra:, :]], dim=-2)
-        new_causal_context[name2] = x[..., -(self.kernel_shape - 1):, :]
+        num_extra = causal_context.shape[-2]
+        x = torch.cat([causal_context[...,self.step1_size:], x[..., num_extra:, :]], dim=-2)
+        new_causal_context = torch.cat([new_causal_context, x[..., -(self.kernel_shape - 1):, :]], dim=-1)
         x = x.permute(0, 2, 1)
 
         x = F.pad(x, (2, 0))
@@ -224,12 +220,12 @@ class PIPSMLPMixer(nn.Module):
             for i in range(num_blocks)
         ])
 
-    def forward(self, x, causal_context=None):
+    def forward(self, x, causal_context):
         x = self.linear(x)
-        all_causal_context = {}
-        for block in self.blocks:
-            x, new_causal_context = block(x, causal_context)
-            all_causal_context.update(new_causal_context)
+        all_causal_context = causal_context.clone()
+        for i, block in enumerate(self.blocks):
+            x, new_causal_context = block(x, causal_context[i,...])
+            all_causal_context[i,...] = new_causal_context
 
         x = self.layer_norm(x)
         x = self.linear_1(x)

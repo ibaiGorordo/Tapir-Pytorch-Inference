@@ -50,11 +50,14 @@ if __name__ == '__main__':
     resize_height = 256
     resize_width = 256
     num_points = 256
+    fastMode = True
 
     model = tapir_model.TAPIR(pyramid_level=1, use_casual_conv=True, initial_resolution=(resize_height, resize_width), device=device)
     model.load_state_dict(torch.load('causal_bootstapir_checkpoint.pt'))
     model = model.to(device)
     model = model.eval()
+
+    num_iters = 1 if fastMode else model.num_pips_iter
 
     cap = cv2.VideoCapture('horsejump-high.mp4')
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -70,7 +73,7 @@ if __name__ == '__main__':
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
-    causal_state = model.construct_initial_causal_state(query_points.shape[0])
+    causal_state = model.construct_initial_causal_state(num_iters, query_points.shape[0])
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -78,7 +81,7 @@ if __name__ == '__main__':
             break
 
         # Note: we add a batch dimension.
-        tracks, visibles, causal_state = online_model_predict(frame=frame, query_feats=query_feats, hires_query_feats=hires_query_feats, causal_context=causal_state)
+        tracks, visibles, causal_state = online_model_predict(frame, query_feats, hires_query_feats, causal_state, fastMode)
         visibles = visibles.cpu().numpy().squeeze()
 
         tracks = tracks.cpu().numpy().squeeze()

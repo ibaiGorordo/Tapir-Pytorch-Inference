@@ -152,7 +152,7 @@ class TAPIR(nn.Module):
             hires_feats_grid: torch.Tensor,
             query_feats: torch.Tensor,
             hires_query_feats: torch.Tensor,
-            causal_context: Optional[list[dict[str, torch.Tensor]]] = None
+            causal_context: torch.Tensor,
     ) -> tuple[Tensor, Tensor, Tensor, list[list[Any]]]:
 
         num_iters = self.num_pips_iter
@@ -218,7 +218,7 @@ class TAPIR(nn.Module):
                 orig_hw=self.initial_resolution,
                 last_iter=mixer_feats,
                 resize_hw=self.initial_resolution,
-                causal_context=cc_chunk[i],
+                causal_context=cc_chunk,
             )
 
             points, occlusion, expected_dist, mixer_feats, cc = refined
@@ -251,7 +251,7 @@ class TAPIR(nn.Module):
             hires_feats_grid: torch.Tensor,
             query_feats: torch.Tensor,
             hires_query_feats: torch.Tensor,
-            causal_context: Optional[list[dict[str, torch.Tensor]]] = None,
+            causal_context: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[dict[str, torch.Tensor]]]:
 
         num_queries = query_feats.shape[1]
@@ -298,30 +298,15 @@ class TAPIR(nn.Module):
             orig_hw=self.initial_resolution,
             last_iter=None,
             resize_hw=self.initial_resolution,
-            causal_context=causal_context[0],
+            causal_context=causal_context[0,...],
         )
-        points, occlusion, expected_dist, mixer_feats, cc = refined
-
-        new_causal_context = []
-        combined_dict = {}
-        for key in cc.keys():
-            arrays = [cc[key]]
-            concatenated = torch.cat(arrays, dim=1)
-            combined_dict[key] = concatenated[:, inv_perm]
-        new_causal_context.append(combined_dict)
+        points, occlusion, expected_dist, mixer_feats, new_causal_context = refined
 
         return points, occlusion, expected_dist, new_causal_context
 
-    def refine_pips(self,
-            target_feature,
-            pyramid,
-            pos_guess,
-            occ_guess,
-            expd_guess,
-            orig_hw,
-            last_iter=None,
-            resize_hw=None,
-            causal_context=None):
+    def refine_pips(self, target_feature, pyramid,
+                    pos_guess, occ_guess, expd_guess,
+                    orig_hw, last_iter, resize_hw, causal_context):
 
         orig_h, orig_w = orig_hw
         resized_h, resized_w = resize_hw
@@ -384,21 +369,11 @@ class TAPIR(nn.Module):
         )
         b, n, c = mlp_input.shape
         x = mlp_input.view(b * n, c)
-
-        for k, v in causal_context.items():
-            b, n, *_ = v.shape
-            causal_context[k] = v.view(b * n, *v.shape[2:])
-
         res, new_causal_context = self.torch_pips_mixer(x.unsqueeze(1).float(), causal_context)
 
         n, _, c = res.shape
         b = mlp_input.shape[0]
         res = res.view(b, n, c)
-
-        for k, v in new_causal_context.items():
-            b = mlp_input.shape[0]
-            n = v.shape[0] // b
-            new_causal_context[k] = v.view(b, n, *v.shape[1:])
 
         pos_update = utils.convert_grid_coordinates(
             res[..., :2],
@@ -410,7 +385,7 @@ class TAPIR(nn.Module):
             res[..., 2] + occ_guess,
             res[..., 3] + expd_guess,
             res[..., 4:] + (mlp_input_features if last_iter is None else last_iter),
-            new_causal_context,
+            new_causal_context.unsqueeze(0),
         )
 
     def tracks_from_cost_volume(
@@ -487,13 +462,6 @@ class TAPIR(nn.Module):
 
         return points, occlusion, expected_dist
 
-    def construct_initial_causal_state(self, num_points, num_resolutions=1):
+    def construct_initial_causal_state(self, num_iters, num_points, num_resolutions=1):
         """Construct initial causal state."""
-        value_shapes = {}
-        for i in range(self.num_mixer_blocks):
-            value_shapes[f'block_{i}_causal_1'] = (1, num_points, 2, 512)
-            value_shapes[f'block_{i}_causal_2'] = (1, num_points, 2, 2048)
-        fake_ret = {
-            k: torch.zeros(v, dtype=torch.float32, device=self.device) for k, v in value_shapes.items()
-        }
-        return [fake_ret] * num_resolutions * 4
+        return torch.zeros((num_iters, self.num_mixer_blocks, num_points, 2, 512+2048), dtype=torch.float32, device=self.device)
