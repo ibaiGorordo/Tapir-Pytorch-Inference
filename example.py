@@ -81,7 +81,6 @@ def online_model_predict(frame, query_feats, hires_query_feats, causal_context):
         hires_feats_grid=hires_feats_grid,
         query_feats=query_feats,
         hires_query_feats=hires_query_feats,
-        query_chunk_size=64,
         causal_context=causal_context,
         get_causal_context=True,
     )

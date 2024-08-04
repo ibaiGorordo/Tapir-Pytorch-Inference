@@ -151,7 +151,6 @@ class TAPIR(nn.Module):
             hires_feats_grid: torch.Tensor,
             query_feats: torch.Tensor,
             hires_query_feats: torch.Tensor,
-            query_chunk_size: Optional[int] = None,
             causal_context: Optional[dict[str, torch.Tensor]] = None,
             get_causal_context: bool = False,
     ) -> Mapping[str, Any]:
@@ -168,88 +167,83 @@ class TAPIR(nn.Module):
         inv_perm = torch.zeros_like(perm)
         inv_perm[perm] = torch.arange(num_queries)
 
-        for ch in range(0, num_queries, query_chunk_size):
-            perm_chunk = perm[ch: ch + query_chunk_size]
-            chunk = query_feats[:, perm_chunk]
 
-            cc_chunk = []
-            for d in range(len(causal_context)):
-                tmp_dict = {}
-                for k, v in causal_context[d].items():
-                    tmp_dict[k] = v[:, perm_chunk]
-                cc_chunk.append(tmp_dict)
+        # perm_chunk = perm
+        # chunk = query_feats[:, perm_chunk]
 
-            points, occlusion, expected_dist = self.tracks_from_cost_volume(
-                chunk,
+        cc_chunk = []
+        for d in range(len(causal_context)):
+            tmp_dict = {}
+            for k, v in causal_context[d].items():
+                tmp_dict[k] = v
+            cc_chunk.append(tmp_dict)
+
+        points, occlusion, expected_dist = self.tracks_from_cost_volume(
+            query_feats,
+            feature_grid,
+            None,
+            im_shp=feature_grid.shape[0:1]
+                   + self.initial_resolution
+                   + (3,),
+        )
+
+        coords = utils.convert_grid_coordinates(
+            points,
+            self.initial_resolution[::-1],
+            video_size[::-1],
+            coordinate_format='xy')
+
+        pts_iters[0].append(coords)
+        occ_iters[0].append(occlusion)
+        expd_iters[0].append(expected_dist)
+
+        mixer_feats = None
+        for i in range(num_iters):
+            queries = [
+                hires_query_feats,
+                query_feats,
+            ]
+
+            for _ in range(self.pyramid_level):
+                queries.append(queries[-1])
+            pyramid = [
+                hires_feats_grid,
                 feature_grid,
-                None,
-                im_shp=feature_grid.shape[0:1]
-                       + self.initial_resolution
-                       + (3,),
+            ]
+            for _ in range(self.pyramid_level):
+                pyramid.append(
+                    F.avg_pool3d(
+                        pyramid[-1],
+                        kernel_size=(2, 2, 1),
+                        stride=(2, 2, 1),
+                        padding=0,
+                    )
+                )
+            cc = cc_chunk[i]
+
+            refined = self.refine_pips(
+                queries,
+                pyramid,
+                points,
+                occlusion,
+                expected_dist,
+                orig_hw=self.initial_resolution,
+                last_iter=mixer_feats,
+                resize_hw=self.initial_resolution,
+                causal_context=cc,
+                get_causal_context=get_causal_context,
             )
 
+            points, occlusion, expected_dist, mixer_feats, cc = refined
             coords = utils.convert_grid_coordinates(
                 points,
                 self.initial_resolution[::-1],
                 video_size[::-1],
                 coordinate_format='xy')
-
-            pts_iters[0].append(coords)
-            occ_iters[0].append(occlusion)
-            expd_iters[0].append(expected_dist)
-
-            mixer_feats = None
-            for i in range(num_iters):
-                queries = [
-                    hires_query_feats[:, perm_chunk],
-                    query_feats[:, perm_chunk],
-                ]
-
-                for _ in range(self.pyramid_level):
-                    queries.append(queries[-1])
-                pyramid = [
-                    hires_feats_grid,
-                    feature_grid,
-                ]
-                for _ in range(self.pyramid_level):
-                    pyramid.append(
-                        F.avg_pool3d(
-                            pyramid[-1],
-                            kernel_size=(2, 2, 1),
-                            stride=(2, 2, 1),
-                            padding=0,
-                        )
-                    )
-                cc = cc_chunk[i]
-
-                refined = self.refine_pips(
-                    queries,
-                    pyramid,
-                    points,
-                    occlusion,
-                    expected_dist,
-                    orig_hw=self.initial_resolution,
-                    last_iter=mixer_feats,
-                    resize_hw=self.initial_resolution,
-                    causal_context=cc,
-                    get_causal_context=get_causal_context,
-                )
-
-                points, occlusion, expected_dist, mixer_feats, cc = refined
-                coords = utils.convert_grid_coordinates(
-                    points,
-                    self.initial_resolution[::-1],
-                    video_size[::-1],
-                    coordinate_format='xy')
-                pts_iters[i + 1].append(coords)
-                occ_iters[i + 1].append(occlusion)
-                expd_iters[i + 1].append(expected_dist)
-                new_causal_context[i].append(cc)
-
-                if (i + 1) % self.num_pips_iter == 0:
-                    mixer_feats = None
-                    expected_dist = expd_iters[0][-1]
-                    occlusion = occ_iters[0][-1]
+            pts_iters[i + 1].append(coords)
+            occ_iters[i + 1].append(occlusion)
+            expd_iters[i + 1].append(expected_dist)
+            new_causal_context[i].append(cc)
 
         occlusion = []
         points = []
@@ -301,18 +295,15 @@ class TAPIR(nn.Module):
             last_iter_query = None
             if last_iter is not None:
                 if pyridx == 0:
-                    last_iter_query = last_iter[..., : self.highres_dim]
+                    last_iter_query = last_iter[..., :self.highres_dim]
                 else:
                     last_iter_query = last_iter[..., self.highres_dim:]
-                #
-                # print(last_iter_query.shape)
 
             ctxy, ctxx = torch.meshgrid(
                 torch.arange(-3, 4), torch.arange(-3, 4), indexing='ij'
             )
             ctx = torch.stack([ctxy, ctxx], dim=-1)
             ctx = ctx.reshape(-1, 2).to(coords.device)
-            # print(pyridx, coords.shape, ctx.shape)
             coords2 = coords.unsqueeze(2) + ctx.unsqueeze(0).unsqueeze(0)
             neighborhood = utils.map_smpled_coordinates_2d(grid, coords2)
 
