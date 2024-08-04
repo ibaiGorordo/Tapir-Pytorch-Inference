@@ -75,7 +75,7 @@ def online_model_predict(frame, query_feats, hires_query_feats, causal_context):
     frame = preprocess_frame(frame, resize=(resize_height, resize_width))
     feature_grid, hires_feats_grid = model.get_feature_grids(frame)
 
-    trajectories = model.estimate_trajectories(
+    tracks, occlusions, expected_dist, causal_context = model.estimate_trajectories_fast(
         (resize_height, resize_width),
         feature_grid=feature_grid,
         hires_feats_grid=hires_feats_grid,
@@ -84,15 +84,7 @@ def online_model_predict(frame, query_feats, hires_query_feats, causal_context):
         causal_context=causal_context,
         get_causal_context=True,
     )
-    causal_context = trajectories['causal_context']
-
-    # Take only the predictions for the final resolution.
-    # For running on higher resolution, it's typically better to average across
-    # resolutions.
-    tracks = trajectories['tracks'][-1]
-    occlusions = trajectories['occlusion'][-1]
-    uncertainty = trajectories['expected_dist'][-1]
-    visibles = postprocess_occlusions(occlusions, uncertainty)
+    visibles = postprocess_occlusions(occlusions, expected_dist)
     return tracks, visibles, causal_context
 
 if __name__ == '__main__':
@@ -100,7 +92,7 @@ if __name__ == '__main__':
     resize_width = 256
     num_points = 256
 
-    model = tapir_model.TAPIR(pyramid_level=1, use_casual_conv=True, initial_resolution=(resize_height, resize_width))
+    model = tapir_model.TAPIR(pyramid_level=1, use_casual_conv=True, initial_resolution=(resize_height, resize_width), device=device)
     model.load_state_dict(torch.load('causal_bootstapir_checkpoint.pt'))
     model = model.to(device)
     model = model.eval()
@@ -120,9 +112,6 @@ if __name__ == '__main__':
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
     causal_state = model.construct_initial_causal_state(query_points.shape[0])
-    for i in range(len(causal_state)):
-        for k, v in causal_state[i].items():
-            causal_state[i][k] = v.to(device)
 
     predictions = []
     frames = []
@@ -139,7 +128,6 @@ if __name__ == '__main__':
 
         visibles = visibles.cpu().numpy().squeeze()
 
-
         tracks = tracks.cpu().numpy().squeeze()
         tracks[:, 0] = tracks[:, 0] * width / resize_width
         tracks[:, 1] = tracks[:, 1] * height / resize_height
@@ -147,6 +135,6 @@ if __name__ == '__main__':
         frame = draw_points(frame, tracks, visibles, point_colors)
 
         cv2.imshow('frame', frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        if cv2.waitKey(100) & 0xFF == ord('q'):
             break
 
