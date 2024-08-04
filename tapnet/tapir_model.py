@@ -156,10 +156,7 @@ class TAPIR(nn.Module):
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
 
         num_iters = self.num_pips_iter
-        occ_iters = [[] for _ in range(num_iters + 1)]
-        pts_iters = [[] for _ in range(num_iters + 1)]
-        expd_iters = [[] for _ in range(num_iters + 1)]
-        new_causal_context = [[] for _ in range(num_iters)]
+
 
         num_queries = query_feats.shape[1]
         perm = torch.arange(num_queries)
@@ -176,10 +173,7 @@ class TAPIR(nn.Module):
                    + (3,),
         )
 
-        pts_iters[0].append(points)
-        occ_iters[0].append(occlusion)
-        expd_iters[0].append(expected_dist)
-
+        new_causal_context = []
         mixer_feats = None
         for i in range(num_iters):
             queries = [
@@ -215,22 +209,11 @@ class TAPIR(nn.Module):
             )
 
             points, occlusion, expected_dist, mixer_feats, cc = refined
-            pts_iters[i + 1].append(points)
-            occ_iters[i + 1].append(occlusion)
-            expd_iters[i + 1].append(expected_dist)
-            new_causal_context[i] = cc
+            new_causal_context.append(cc)
 
         new_causal_context = torch.cat(new_causal_context, dim=0)
 
-        occlusion = []
-        points = []
-        expd = []
-        for i, _ in enumerate(occ_iters):
-            occlusion.append(torch.cat(occ_iters[i], dim=1)[:, inv_perm])
-            points.append(torch.cat(pts_iters[i], dim=1)[:, inv_perm])
-            expd.append(torch.cat(expd_iters[i], dim=1)[:, inv_perm])
-
-        return points[-1], occlusion[-1], expd[-1], new_causal_context
+        return points, occlusion, expected_dist, new_causal_context
 
     def estimate_trajectories_fast(
             self,
@@ -239,7 +222,7 @@ class TAPIR(nn.Module):
             query_feats: torch.Tensor,
             hires_query_feats: torch.Tensor,
             causal_context: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[dict[str, torch.Tensor]]]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
 
         num_queries = query_feats.shape[1]
         perm = torch.arange(num_queries)
@@ -293,7 +276,7 @@ class TAPIR(nn.Module):
 
     def refine_pips(self, target_feature, pyramid,
                     pos_guess, occ_guess, expd_guess,
-                    orig_hw, last_iter, resize_hw, causal_context):
+                    orig_hw, last_iter, resize_hw, causal_context) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
 
         orig_h, orig_w = orig_hw
         resized_h, resized_w = resize_hw
