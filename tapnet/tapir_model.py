@@ -120,21 +120,21 @@ class TAPIR(nn.Module):
 
         position_in_grid = utils.convert_grid_coordinates(
             query_points,
-            torch.tensor([1,self.initial_resolution[0], self.initial_resolution[1]]).to(query_points.device),
-            feature_grid.shape[1:4],
-            coordinate_format='tyx',
-        )
-        position_in_grid_hires = utils.convert_grid_coordinates(
-            query_points,
-            torch.tensor([1,self.initial_resolution[0], self.initial_resolution[1]]).to(query_points.device),
-            hires_feats_grid.shape[1:4],
-            coordinate_format='tyx',
+            torch.tensor([self.initial_resolution[0], self.initial_resolution[1]]).to(query_points.device),
+            feature_grid.shape[1:3],
+            coordinate_format='xy',
         )
 
-        query_feats = utils.map_coordinates_3d(
+        position_in_grid_hires = utils.convert_grid_coordinates(
+            query_points,
+            torch.tensor([self.initial_resolution[0], self.initial_resolution[1]]).to(query_points.device),
+            hires_feats_grid.shape[1:3],
+            coordinate_format='xy',
+        )
+        query_feats = utils.map_coordinates_2d(
             feature_grid, position_in_grid
         )
-        hires_query_feats = utils.map_coordinates_3d(
+        hires_query_feats = utils.map_coordinates_2d(
             hires_feats_grid, position_in_grid_hires
         )
         return query_feats, hires_query_feats
@@ -155,8 +155,10 @@ class TAPIR(nn.Module):
                 resolution.
         """
         resnet_out = self.resnet_torch(frame)
+        # print(resnet_out)
         latent = resnet_out['resnet_unit_3'].permute(0, 2, 3, 1)
         hires = resnet_out['resnet_unit_1'].permute(0, 2, 3, 1)
+        # print(latent)
 
         latent = self.extra_convs(latent)
         latent = latent / torch.sqrt(
@@ -172,8 +174,8 @@ class TAPIR(nn.Module):
             )
         )
 
-        feature_grid = latent.view(1, 1, *latent.shape[1:])
-        hires_feats_grid = hires.view(1, 1, *hires.shape[1:])
+        feature_grid = latent.view(1, *latent.shape[1:])
+        hires_feats_grid = hires.view(1, *hires.shape[1:])
 
         return feature_grid, hires_feats_grid
 
@@ -237,12 +239,6 @@ class TAPIR(nn.Module):
             new_causal_context.append([])
         del new_causal_context[-1]
 
-        infer = functools.partial(
-            self.tracks_from_cost_volume,
-            im_shp=feature_grid.shape[0:2]
-                   + self.initial_resolution
-                   + (3,),
-        )
 
         num_queries = query_feats.shape[1]
         perm = torch.arange(num_queries)
@@ -261,23 +257,29 @@ class TAPIR(nn.Module):
                     tmp_dict[k] = v[:, perm_chunk]
                 cc_chunk.append(tmp_dict)
 
-            infer_query_points = None
-            points, occlusion, expected_dist = infer(
+
+
+            points, occlusion, expected_dist = self.tracks_from_cost_volume(
                 chunk,
                 feature_grid,
-                infer_query_points,
+                None,
+                im_shp=feature_grid.shape[0:1]
+                       + self.initial_resolution
+                       + (3,),
             )
+
+
             pts_iters[0].append(train2orig(points))
             occ_iters[0].append(occlusion)
             expd_iters[0].append(expected_dist)
 
             mixer_feats = None
             for i in range(num_iters):
-                feature_level = i // self.num_pips_iter + 1
                 queries = [
                     hires_query_feats[:, perm_chunk],
                     query_feats[:, perm_chunk],
                 ]
+
                 for _ in range(self.pyramid_level):
                     queries.append(queries[-1])
                 pyramid = [
@@ -294,6 +296,7 @@ class TAPIR(nn.Module):
                         )
                     )
                 cc = cc_chunk[i]
+
                 refined = self.refine_pips(
                     queries,
                     None,
@@ -308,6 +311,7 @@ class TAPIR(nn.Module):
                     causal_context=cc,
                     get_causal_context=get_causal_context,
                 )
+
                 points, occlusion, expected_dist, mixer_feats, cc = refined
                 pts_iters[i + 1].append(train2orig(points))
                 occ_iters[i + 1].append(occlusion)
@@ -319,6 +323,8 @@ class TAPIR(nn.Module):
                     expected_dist = expd_iters[0][-1]
                     occlusion = occ_iters[0][-1]
 
+
+
         occlusion = []
         points = []
         expd = []
@@ -326,6 +332,7 @@ class TAPIR(nn.Module):
             occlusion.append(torch.cat(occ_iters[i], dim=1)[:, inv_perm])
             points.append(torch.cat(pts_iters[i], dim=1)[:, inv_perm])
             expd.append(torch.cat(expd_iters[i], dim=1)[:, inv_perm])
+
 
         for i in range(len(new_causal_context)):
             combined_dict = {}
@@ -377,21 +384,25 @@ class TAPIR(nn.Module):
                     last_iter_query = last_iter[..., : self.highres_dim]
                 else:
                     last_iter_query = last_iter[..., self.highres_dim:]
+                #
+                # print(last_iter_query.shape)
 
             ctxy, ctxx = torch.meshgrid(
                 torch.arange(-3, 4), torch.arange(-3, 4), indexing='ij'
             )
             ctx = torch.stack([ctxy, ctxx], dim=-1)
             ctx = ctx.reshape(-1, 2).to(coords.device)
-            coords2 = coords.unsqueeze(3) + ctx.unsqueeze(0).unsqueeze(0).unsqueeze(0)
-            neighborhood = utils.map_coordinates_2d(grid, coords2)
+            # print(pyridx, coords.shape, ctx.shape)
+            coords2 = coords.unsqueeze(2) + ctx.unsqueeze(0).unsqueeze(0)
+            neighborhood = utils.map_smpled_coordinates_2d(grid, coords2)
+
 
             # s is spatial context size
             if last_iter_query is None:
-                patches = torch.einsum('bnfsc,bnc->bnfs', neighborhood, query)
+                patches = torch.einsum('bnsc,bnc->bns', neighborhood, query)
             else:
                 patches = torch.einsum(
-                    'bnfsc,bnfc->bnfs', neighborhood, last_iter_query
+                    'bnsc,bnc->bns', neighborhood, last_iter_query
                 )
 
             corrs_pyr.append(patches)
@@ -402,17 +413,15 @@ class TAPIR(nn.Module):
         occ_guess_input = occ_guess[..., None]
         expd_guess_input = expd_guess[..., None]
 
+
         # mlp_input is batch, num_points, num_chunks, frames_per_chunk, channels
         if last_iter is None:
             both_feature = torch.cat([target_feature[0], target_feature[1]], axis=-1)
-            mlp_input_features = torch.tile(
-                both_feature.unsqueeze(2), (1, 1, corrs_chunked.shape[-2], 1)
-            )
+            mlp_input_features = both_feature
         else:
             mlp_input_features = last_iter
 
         pos_guess_input = torch.zeros_like(pos_guess_input)
-
         mlp_input = torch.cat(
             [
                 pos_guess_input,
@@ -423,24 +432,27 @@ class TAPIR(nn.Module):
             ],
             axis=-1,
         )
-        b,n,f,c = mlp_input.shape
-        x = mlp_input.view(b*n, f, c)
+        b,n,c = mlp_input.shape
+        x = mlp_input.view(b*n, c)
 
         for k, v in causal_context.items():
             b, n, *_ = v.shape
             causal_context[k] = v.view(b*n, *v.shape[2:])
 
         res, new_causal_context = self.torch_pips_mixer(
-            x.float(), causal_context, get_causal_context
+            x.unsqueeze(1).float(), causal_context, get_causal_context
         )
-        n,f,c = res.shape
+
+
+        n,_,c = res.shape
         b = mlp_input.shape[0]
-        res = res.view(b, n, f, c)
+        res = res.view(b, n, c)
 
         for k, v in new_causal_context.items():
             b = mlp_input.shape[0]
             n = v.shape[0] // b
             new_causal_context[k] = v.view(b, n, *v.shape[1:])
+
 
         pos_update = utils.convert_grid_coordinates(
             res[..., :2],
@@ -489,31 +501,27 @@ class TAPIR(nn.Module):
 
         mods = self.torch_cost_volume_track_mods
         cost_volume = torch.einsum(
-            'bnc,bthwc->tbnhw',
+            'bnc,bhwc->bnhw',
             interp_feature,
             feature_grid,
         )
 
+
+
         shape = cost_volume.shape
         batch_size, num_points = cost_volume.shape[1:3]
-        t, b, n, h, w = cost_volume.shape
-        cost_volume = cost_volume.view(t * b * n, h, w, 1)
+        b, n, h, w = cost_volume.shape
+        cost_volume = cost_volume.view(b * n, h, w, 1)
 
         cost_volume = cost_volume.permute(0, 3, 1, 2)
         occlusion = mods['hid1'](cost_volume)
         occlusion = torch.nn.functional.relu(occlusion)
 
         pos = mods['hid2'](occlusion)
-        pos = pos.permute(0, 2, 3, 1)
-        t = shape[0]
-        b = pos.shape[0] // t
-        h, w = pos.shape[1:3]
-        pos_rshp = pos.view(t, b, h, w, 1)
+        pos = pos.permute(1, 0, 2, 3)
 
-        b = pos_rshp.shape[1]//num_points
-        pos = pos_rshp.view(t, b, n, h, w).permute(1, 2, 0, 3, 4)
+        pos_sm = pos.reshape(pos.size(0), pos.size(1), -1)
 
-        pos_sm = pos.reshape(pos.size(0), pos.size(1), pos.size(2), -1)
         softmaxed = F.softmax(pos_sm * self.softmax_temperature, dim=-1)
         pos = softmaxed.view_as(pos)
 
@@ -527,11 +535,9 @@ class TAPIR(nn.Module):
         occlusion = torch.nn.functional.relu(occlusion)
         occlusion = mods['occ_out'](occlusion)
 
-        t = shape[0]
-        n = shape[2]
-        b = occlusion.shape[0] // (t * n)
-        occlusion = occlusion.view(t, b, n, 2)
-        occlusion = occlusion.permute(1, 2, 0, 3)
+        n = shape[1]
+        b = occlusion.shape[0] // n
+        occlusion = occlusion.view(b, n, 2)
         expected_dist = occlusion[..., 1]
         occlusion = occlusion[..., 0]
 

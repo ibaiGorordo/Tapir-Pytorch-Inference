@@ -2,6 +2,7 @@ import numpy as np
 import cv2
 
 import torch
+torch.manual_seed(0)
 import torch.nn.functional as F
 
 from tapnet import tapir_model
@@ -45,8 +46,7 @@ def sample_random_points(frame_max_idx, height, width, num_points):
     x, y = np.meshgrid(x, y)
     x = np.expand_dims(x.flatten(), -1)
     y = np.expand_dims(y.flatten(), -1)
-    t = np.random.randint(0, frame_max_idx + 1, (num_points, 1))
-    points = np.concatenate((t, y, x), axis=-1).astype(np.int32)  # [num_points, 3]
+    points = np.concatenate((y,x), axis=-1).astype(np.int32)  # [num_points, 3]
     return points
 
 
@@ -72,6 +72,7 @@ def online_model_predict(frame, query_feats, hires_query_feats, causal_context):
     """Compute point tracks and occlusions given frame and query points."""
     frame = preprocess_frame(frame, resize=(resize_height, resize_width))
     feature_grid, hires_feats_grid = model.get_feature_grids(frame)
+
     trajectories = model.estimate_trajectories(
         (resize_height, resize_width),
         feature_grid=feature_grid,
@@ -136,6 +137,8 @@ if __name__ == '__main__':
         predictions.append({'tracks': tracks, 'visibles': visibles})
 
         visibles = visibles.cpu().numpy().squeeze()
+
+
         tracks = tracks.cpu().numpy().squeeze()
         tracks[:, 0] = tracks[:, 0] * width / resize_width
         tracks[:, 1] = tracks[:, 1] * height / resize_height
@@ -143,6 +146,6 @@ if __name__ == '__main__':
         frame = draw_points(frame, tracks, visibles, point_colors)
 
         cv2.imshow('frame', frame)
-        if cv2.waitKey(30) & 0xFF == ord('q'):
+        if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
