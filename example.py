@@ -12,6 +12,8 @@ if torch.cuda.is_available():
 else:
     device = torch.device('cpu')
 
+random = np.random.RandomState(2)
+
 def draw_points(frame, points, visible, colors):
     for i in range(points.shape[0]):
         if not visible[i]:
@@ -110,7 +112,7 @@ if __name__ == '__main__':
 
     query_points = sample_random_points(0, resize_height, resize_width, num_points)
     query_points = torch.tensor(query_points).to(device)
-    point_colors = np.random.randint(0, 255, (num_points, 3))
+    point_colors = random.randint(0, 255, (num_points, 3))
 
     # Initialize query features
     ret, frame = cap.read()

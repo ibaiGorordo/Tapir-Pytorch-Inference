@@ -15,16 +15,15 @@
 
 """TAPIR models definition."""
 
-import functools
-from typing import Any, List, Mapping, NamedTuple, Optional, Sequence, Tuple
+from typing import Any, Mapping, Optional, Tuple
 
-import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
 
 from tapnet import nets
 from tapnet import utils
+
 
 class TAPIR(nn.Module):
     """TAPIR model."""
@@ -98,25 +97,6 @@ class TAPIR(nn.Module):
             feature_grid: torch.Tensor,
             hires_feats_grid: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Computes query features, which can be used for estimate_trajectories.
-
-        Args:
-          is_training: Whether we are training.
-          query_points: The query points for which we compute tracks.
-          hires_feats_grid: If passed, we'll use these feature grids rather than
-            computing new ones.
-          refinement_resolutions: A list of (height, width) tuples.  Refinement will
-            be repeated at each specified resolution, in order to achieve high
-            accuracy on resolutions higher than what TAPIR was trained on. If None,
-            reasonable refinement resolutions will be inferred from the input video
-            size.
-
-        Returns:
-          A QueryFeatures object which contains the required features for every
-            required resolution.
-        """
-        # shape is [batch_size, time, height, width, channels]; conversion needs
-        # [time, width, height]
 
         position_in_grid = utils.convert_grid_coordinates(
             query_points,
@@ -139,26 +119,11 @@ class TAPIR(nn.Module):
         )
         return query_feats, hires_query_feats
 
-    def get_feature_grids(
-            self,
-            frame: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Computes feature grids.
-
-        Args:
-            frame: A 4-D tensor representing an image
-            is_training: Whether we are training.
-
-        Returns:
-            feature_grid: A list of feature grids, one for each resolution.
-            hires_feats: A list of high-resolution feature grids, one for each
-                resolution.
-        """
+    def get_feature_grids(self,frame: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         resnet_out = self.resnet_torch(frame)
-        # print(resnet_out)
+
         latent = resnet_out['resnet_unit_3'].permute(0, 2, 3, 1)
         hires = resnet_out['resnet_unit_1'].permute(0, 2, 3, 1)
-        # print(latent)
 
         latent = self.extra_convs(latent)
         latent = latent / torch.sqrt(
@@ -190,55 +155,12 @@ class TAPIR(nn.Module):
             causal_context: Optional[dict[str, torch.Tensor]] = None,
             get_causal_context: bool = False,
     ) -> Mapping[str, Any]:
-        """Estimates trajectories given features for a video and query features.
 
-        Args:
-          video_size: A 2-tuple containing the original [height, width] of the
-            video.  Predictions will be scaled with respect to this resolution.
-          is_training: Whether we are training.
-          feature_grids: a FeatureGrids object computed for the given video.
-          query_features: a QueryFeatures object computed for the query points.
-          query_points_in_video: If provided, assume that the query points come from
-            the same video as feature_grids, and therefore constrain the resulting
-            trajectories to (approximately) pass through them.
-          query_chunk_size: When computing cost volumes, break the queries into
-            chunks of this size to save memory.
-          causal_context: If provided, a dict of causal context to use for
-            refinement.
-          get_causal_context: If True, return causal context in the output.
-
-        Returns:
-          A dict of outputs, including:
-            occlusion: Occlusion logits, of shape [batch, num_queries, num_frames]
-              where higher indicates more likely to be occluded.
-            tracks: predicted point locations, of shape
-              [batch, num_queries, num_frames, 2], where each point is [x, y]
-              in raster coordinates
-            expected_dist: uncertainty estimate logits, of shape
-              [batch, num_queries, num_frames], where higher indicates more likely
-              to be far from the correct answer.
-        """
-
-        def train2orig(x):
-            return utils.convert_grid_coordinates(
-                x,
-                self.initial_resolution[::-1],
-                video_size[::-1],
-                coordinate_format='xy',
-            )
-
-        occ_iters = []
-        pts_iters = []
-        expd_iters = []
-        new_causal_context = []
         num_iters = self.num_pips_iter
-        for _ in range(num_iters + 1):
-            occ_iters.append([])
-            pts_iters.append([])
-            expd_iters.append([])
-            new_causal_context.append([])
-        del new_causal_context[-1]
-
+        occ_iters = [[] for _ in range(num_iters + 1)]
+        pts_iters = [[] for _ in range(num_iters + 1)]
+        expd_iters = [[] for _ in range(num_iters + 1)]
+        new_causal_context = [[] for _ in range(num_iters)]
 
         num_queries = query_feats.shape[1]
         perm = torch.arange(num_queries)
@@ -257,8 +179,6 @@ class TAPIR(nn.Module):
                     tmp_dict[k] = v[:, perm_chunk]
                 cc_chunk.append(tmp_dict)
 
-
-
             points, occlusion, expected_dist = self.tracks_from_cost_volume(
                 chunk,
                 feature_grid,
@@ -268,8 +188,13 @@ class TAPIR(nn.Module):
                        + (3,),
             )
 
+            coords = utils.convert_grid_coordinates(
+                points,
+                self.initial_resolution[::-1],
+                video_size[::-1],
+                coordinate_format='xy')
 
-            pts_iters[0].append(train2orig(points))
+            pts_iters[0].append(coords)
             occ_iters[0].append(occlusion)
             expd_iters[0].append(expected_dist)
 
@@ -299,21 +224,24 @@ class TAPIR(nn.Module):
 
                 refined = self.refine_pips(
                     queries,
-                    None,
                     pyramid,
                     points,
                     occlusion,
                     expected_dist,
                     orig_hw=self.initial_resolution,
                     last_iter=mixer_feats,
-                    mixer_iter=i,
                     resize_hw=self.initial_resolution,
                     causal_context=cc,
                     get_causal_context=get_causal_context,
                 )
 
                 points, occlusion, expected_dist, mixer_feats, cc = refined
-                pts_iters[i + 1].append(train2orig(points))
+                coords = utils.convert_grid_coordinates(
+                    points,
+                    self.initial_resolution[::-1],
+                    video_size[::-1],
+                    coordinate_format='xy')
+                pts_iters[i + 1].append(coords)
                 occ_iters[i + 1].append(occlusion)
                 expd_iters[i + 1].append(expected_dist)
                 new_causal_context[i].append(cc)
@@ -323,8 +251,6 @@ class TAPIR(nn.Module):
                     expected_dist = expd_iters[0][-1]
                     occlusion = occ_iters[0][-1]
 
-
-
         occlusion = []
         points = []
         expd = []
@@ -332,7 +258,6 @@ class TAPIR(nn.Module):
             occlusion.append(torch.cat(occ_iters[i], dim=1)[:, inv_perm])
             points.append(torch.cat(pts_iters[i], dim=1)[:, inv_perm])
             expd.append(torch.cat(expd_iters[i], dim=1)[:, inv_perm])
-
 
         for i in range(len(new_causal_context)):
             combined_dict = {}
@@ -351,23 +276,18 @@ class TAPIR(nn.Module):
         out['causal_context'] = new_causal_context
         return out
 
-    def refine_pips(
-            self,
+    def refine_pips(self,
             target_feature,
-            frame_features,
             pyramid,
             pos_guess,
             occ_guess,
             expd_guess,
             orig_hw,
             last_iter=None,
-            mixer_iter=0.0,
             resize_hw=None,
             causal_context=None,
-            get_causal_context=False,
-    ):
-        del frame_features
-        del mixer_iter
+            get_causal_context=False):
+
         orig_h, orig_w = orig_hw
         resized_h, resized_w = resize_hw
         corrs_pyr = []
@@ -396,7 +316,6 @@ class TAPIR(nn.Module):
             coords2 = coords.unsqueeze(2) + ctx.unsqueeze(0).unsqueeze(0)
             neighborhood = utils.map_smpled_coordinates_2d(grid, coords2)
 
-
             # s is spatial context size
             if last_iter_query is None:
                 patches = torch.einsum('bnsc,bnc->bns', neighborhood, query)
@@ -413,10 +332,9 @@ class TAPIR(nn.Module):
         occ_guess_input = occ_guess[..., None]
         expd_guess_input = expd_guess[..., None]
 
-
         # mlp_input is batch, num_points, num_chunks, frames_per_chunk, channels
         if last_iter is None:
-            both_feature = torch.cat([target_feature[0], target_feature[1]], axis=-1)
+            both_feature = torch.cat([target_feature[0], target_feature[1]], dim=-1)
             mlp_input_features = both_feature
         else:
             mlp_input_features = last_iter
@@ -430,21 +348,20 @@ class TAPIR(nn.Module):
                 mlp_input_features,
                 corrs_chunked,
             ],
-            axis=-1,
+            dim=-1,
         )
-        b,n,c = mlp_input.shape
-        x = mlp_input.view(b*n, c)
+        b, n, c = mlp_input.shape
+        x = mlp_input.view(b * n, c)
 
         for k, v in causal_context.items():
             b, n, *_ = v.shape
-            causal_context[k] = v.view(b*n, *v.shape[2:])
+            causal_context[k] = v.view(b * n, *v.shape[2:])
 
         res, new_causal_context = self.torch_pips_mixer(
             x.unsqueeze(1).float(), causal_context, get_causal_context
         )
 
-
-        n,_,c = res.shape
+        n, _, c = res.shape
         b = mlp_input.shape[0]
         res = res.view(b, n, c)
 
@@ -452,7 +369,6 @@ class TAPIR(nn.Module):
             b = mlp_input.shape[0]
             n = v.shape[0] // b
             new_causal_context[k] = v.view(b, n, *v.shape[1:])
-
 
         pos_update = utils.convert_grid_coordinates(
             res[..., :2],
@@ -505,8 +421,6 @@ class TAPIR(nn.Module):
             interp_feature,
             feature_grid,
         )
-
-
 
         shape = cost_volume.shape
         batch_size, num_points = cost_volume.shape[1:3]
