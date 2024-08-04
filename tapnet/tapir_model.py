@@ -15,7 +15,7 @@
 
 """TAPIR models definition."""
 
-from typing import Any, Mapping, Optional, Tuple, List
+from typing import Optional, Tuple
 
 import torch
 from torch import nn, Tensor
@@ -153,7 +153,7 @@ class TAPIR(nn.Module):
             query_feats: torch.Tensor,
             hires_query_feats: torch.Tensor,
             causal_context: torch.Tensor,
-    ) -> tuple[Tensor, Tensor, Tensor, list[list[Any]]]:
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
 
         num_iters = self.num_pips_iter
         occ_iters = [[] for _ in range(num_iters + 1)]
@@ -166,13 +166,6 @@ class TAPIR(nn.Module):
 
         inv_perm = torch.zeros_like(perm)
         inv_perm[perm] = torch.arange(num_queries)
-
-        cc_chunk = []
-        for d in range(len(causal_context)):
-            tmp_dict = {}
-            for k, v in causal_context[d].items():
-                tmp_dict[k] = v
-            cc_chunk.append(tmp_dict)
 
         points, occlusion, expected_dist = self.tracks_from_cost_volume(
             query_feats,
@@ -218,14 +211,16 @@ class TAPIR(nn.Module):
                 orig_hw=self.initial_resolution,
                 last_iter=mixer_feats,
                 resize_hw=self.initial_resolution,
-                causal_context=cc_chunk,
+                causal_context=causal_context[i,...],
             )
 
             points, occlusion, expected_dist, mixer_feats, cc = refined
             pts_iters[i + 1].append(points)
             occ_iters[i + 1].append(occlusion)
             expd_iters[i + 1].append(expected_dist)
-            new_causal_context[i].append(cc)
+            new_causal_context[i] = cc
+
+        new_causal_context = torch.cat(new_causal_context, dim=0)
 
         occlusion = []
         points = []
@@ -234,14 +229,6 @@ class TAPIR(nn.Module):
             occlusion.append(torch.cat(occ_iters[i], dim=1)[:, inv_perm])
             points.append(torch.cat(pts_iters[i], dim=1)[:, inv_perm])
             expd.append(torch.cat(expd_iters[i], dim=1)[:, inv_perm])
-
-        for i in range(len(new_causal_context)):
-            combined_dict = {}
-            for key in new_causal_context[i][0].keys():
-                arrays = [d[key] for d in new_causal_context[i]]
-                concatenated = torch.cat(arrays, dim=1)
-                combined_dict[key] = concatenated[:, inv_perm]
-            new_causal_context[i] = combined_dict
 
         return points[-1], occlusion[-1], expd[-1], new_causal_context
 
