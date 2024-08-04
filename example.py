@@ -59,7 +59,7 @@ if __name__ == '__main__':
 
     num_iters = 1 if fastMode else model.num_pips_iter
 
-    cap = cv2.VideoCapture('horsejump-high.mp4')
+    cap = cv2.VideoCapture('https://storage.googleapis.com/dm-tapnet/horsejump-high.mp4')
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
