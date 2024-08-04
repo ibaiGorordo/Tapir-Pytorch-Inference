@@ -140,40 +140,33 @@ class PIPsConvBlock(nn.Module):
         )
         self.conv_channels_mixer = ConvChannelsMixer(in_channels)
 
-    def forward(self, x, causal_context=None, get_causal_context=False):
+    def forward(self, x, causal_context):
         to_skip = x
         x = self.layer_norm(x)
         new_causal_context = {}
-        num_extra = 0
 
-        if causal_context is not None:
-            name1 = self.block_name + '_causal_1'
-            x = torch.cat([causal_context[name1], x], dim=-2)
-            num_extra = causal_context[name1].shape[-2]
-            new_causal_context[name1] = x[..., -(self.kernel_shape - 1):, :]
+        name1 = self.block_name + '_causal_1'
+        x = torch.cat([causal_context[name1], x], dim=-2)
+        new_causal_context[name1] = x[..., -(self.kernel_shape - 1):, :]
 
         x = x.permute(0, 2, 1)
-        if self.use_causal_conv:
-            x = F.pad(x, (2, 0))
+        x = F.pad(x, (2, 0))
         x = self.mlp1_up(x)
 
         x = F.gelu(x, approximate='tanh')
 
-        if causal_context is not None:
-            x = x.permute(0, 2, 1)
-            name2 = self.block_name + '_causal_2'
-            num_extra = causal_context[name2].shape[-2]
-            x = torch.cat([causal_context[name2], x[..., num_extra:, :]], dim=-2)
-            new_causal_context[name2] = x[..., -(self.kernel_shape - 1):, :]
-            x = x.permute(0, 2, 1)
+        x = x.permute(0, 2, 1)
+        name2 = self.block_name + '_causal_2'
+        num_extra = causal_context[name2].shape[-2]
+        x = torch.cat([causal_context[name2], x[..., num_extra:, :]], dim=-2)
+        new_causal_context[name2] = x[..., -(self.kernel_shape - 1):, :]
+        x = x.permute(0, 2, 1)
 
-        if self.use_causal_conv:
-            x = F.pad(x, (2, 0))
+        x = F.pad(x, (2, 0))
         x = self.mlp1_up_1(x)
         x = x.permute(0, 2, 1)
 
-        if causal_context is not None:
-            x = x[..., num_extra:, :]
+        x = x[..., num_extra:, :]
 
         x = x[..., 0::4] + x[..., 1::4] + x[..., 2::4] + x[..., 3::4]
 
@@ -231,13 +224,12 @@ class PIPSMLPMixer(nn.Module):
             for i in range(num_blocks)
         ])
 
-    def forward(self, x, causal_context=None, get_causal_context=False):
+    def forward(self, x, causal_context=None):
         x = self.linear(x)
         all_causal_context = {}
         for block in self.blocks:
-            x, new_causal_context = block(x, causal_context, get_causal_context)
-            if get_causal_context:
-                all_causal_context.update(new_causal_context)
+            x, new_causal_context = block(x, causal_context)
+            all_causal_context.update(new_causal_context)
 
         x = self.layer_norm(x)
         x = self.linear_1(x)

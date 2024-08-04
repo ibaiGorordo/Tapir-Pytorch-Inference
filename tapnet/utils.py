@@ -17,9 +17,11 @@
 
 from typing import Any, Sequence, Union
 import numpy as np
+import cv2
 import torch
 import torch.nn.functional as F
 
+random = np.random.RandomState(2)
 
 def bilinear(x: torch.Tensor, resolution: tuple[int, int]) -> torch.Tensor:
     """Resizes a 5D tensor using bilinear interpolation.
@@ -245,3 +247,54 @@ def generate_default_resolutions(full_size, train_size, num_levels=None):
         )
         sizes.append(size)
     return sizes
+
+
+def draw_points(frame, points, visible, colors):
+    for i in range(points.shape[0]):
+        if not visible[i]:
+            continue
+
+        point = points[i,:]
+        color = colors[i,:]
+        cv2.circle(frame,
+                   (int(point[0]), int(point[1])),
+                   5,
+                   (int(color[0]), int(color[1]), int(color[2])),
+                   -1)
+    return frame
+
+def preprocess_frame(frame, resize=(256, 256), device='cuda'):
+
+    input = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    input = cv2.resize(input, resize)
+    input = input[np.newaxis, :, :, :].astype(np.float32)
+
+    input = torch.tensor(input).to(device)
+    input = input.float()
+    input = input / 255 * 2 - 1
+    input = input.permute(0, 3, 1, 2)
+
+    return input
+
+def sample_grid_points(height, width, num_points):
+    """Sample random points with (time, height, width) order."""
+    x = np.linspace(0, width - 1, int(np.sqrt(num_points)))
+    y = np.linspace(0, height - 1, int(np.sqrt(num_points)))
+    x, y = np.meshgrid(x, y)
+    x = np.expand_dims(x.flatten(), -1)
+    y = np.expand_dims(y.flatten(), -1)
+    points = np.concatenate((y, x), axis=-1).astype(np.int32)  # [num_points, 2]
+    return points
+
+def sample_random_points(height, width, num_points):
+    x = random.randint(0, width-1, int(np.sqrt(num_points)))
+    y = random.randint(0, height-1, int(np.sqrt(num_points)))
+    x, y = np.meshgrid(x, y)
+    x = np.expand_dims(x.flatten(), -1)
+    y = np.expand_dims(y.flatten(), -1)
+    points = np.concatenate((y, x), axis=-1).astype(np.int32)  # [num_points, 2]
+    return points
+
+def postprocess_occlusions(occlusions, expected_dist):
+    visibles = (1 - F.sigmoid(occlusions)) * (1 - F.sigmoid(expected_dist)) > 0.5
+    return visibles

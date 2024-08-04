@@ -15,10 +15,10 @@
 
 """TAPIR models definition."""
 
-from typing import Any, Mapping, Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple, List
 
 import torch
-from torch import nn
+from torch import nn, Tensor
 import torch.nn.functional as F
 
 from tapnet import nets
@@ -148,14 +148,12 @@ class TAPIR(nn.Module):
 
     def estimate_trajectories(
             self,
-            video_size: Tuple[int, int],
             feature_grid: torch.Tensor,
             hires_feats_grid: torch.Tensor,
             query_feats: torch.Tensor,
             hires_query_feats: torch.Tensor,
-            causal_context: Optional[list[dict[str, torch.Tensor]]] = None,
-            get_causal_context: bool = False,
-    ) -> Mapping[str, Any]:
+            causal_context: Optional[list[dict[str, torch.Tensor]]] = None
+    ) -> tuple[Tensor, Tensor, Tensor, list[list[Any]]]:
 
         num_iters = self.num_pips_iter
         occ_iters = [[] for _ in range(num_iters + 1)]
@@ -185,13 +183,7 @@ class TAPIR(nn.Module):
                    + (3,),
         )
 
-        coords = utils.convert_grid_coordinates(
-            points,
-            self.initial_resolution[::-1],
-            video_size[::-1],
-            coordinate_format='xy')
-
-        pts_iters[0].append(coords)
+        pts_iters[0].append(points)
         occ_iters[0].append(occlusion)
         expd_iters[0].append(expected_dist)
 
@@ -227,16 +219,10 @@ class TAPIR(nn.Module):
                 last_iter=mixer_feats,
                 resize_hw=self.initial_resolution,
                 causal_context=cc_chunk[i],
-                get_causal_context=get_causal_context,
             )
 
             points, occlusion, expected_dist, mixer_feats, cc = refined
-            coords = utils.convert_grid_coordinates(
-                points,
-                self.initial_resolution[::-1],
-                video_size[::-1],
-                coordinate_format='xy')
-            pts_iters[i + 1].append(coords)
+            pts_iters[i + 1].append(points)
             occ_iters[i + 1].append(occlusion)
             expd_iters[i + 1].append(expected_dist)
             new_causal_context[i].append(cc)
@@ -257,24 +243,15 @@ class TAPIR(nn.Module):
                 combined_dict[key] = concatenated[:, inv_perm]
             new_causal_context[i] = combined_dict
 
-        out = dict(
-            occlusion=occlusion,
-            tracks=points,
-            expected_dist=expd,
-        )
-
-        out['causal_context'] = new_causal_context
-        return out
+        return points[-1], occlusion[-1], expd[-1], new_causal_context
 
     def estimate_trajectories_fast(
             self,
-            video_size: Tuple[int, int],
             feature_grid: torch.Tensor,
             hires_feats_grid: torch.Tensor,
             query_feats: torch.Tensor,
             hires_query_feats: torch.Tensor,
             causal_context: Optional[list[dict[str, torch.Tensor]]] = None,
-            get_causal_context: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[dict[str, torch.Tensor]]]:
 
         num_queries = query_feats.shape[1]
@@ -282,13 +259,6 @@ class TAPIR(nn.Module):
 
         inv_perm = torch.zeros_like(perm)
         inv_perm[perm] = torch.arange(num_queries)
-
-        cc_chunk = []
-        for d in range(len(causal_context)):
-            tmp_dict = {}
-            for k, v in causal_context[d].items():
-                tmp_dict[k] = v
-            cc_chunk.append(tmp_dict)
 
         points, occlusion, expected_dist = self.tracks_from_cost_volume(
             query_feats,
@@ -328,17 +298,9 @@ class TAPIR(nn.Module):
             orig_hw=self.initial_resolution,
             last_iter=None,
             resize_hw=self.initial_resolution,
-            causal_context=cc_chunk[0],
-            get_causal_context=get_causal_context,
+            causal_context=causal_context[0],
         )
-
         points, occlusion, expected_dist, mixer_feats, cc = refined
-
-        coords = utils.convert_grid_coordinates(
-            points,
-            self.initial_resolution[::-1],
-            video_size[::-1],
-            coordinate_format='xy')
 
         new_causal_context = []
         combined_dict = {}
@@ -348,7 +310,7 @@ class TAPIR(nn.Module):
             combined_dict[key] = concatenated[:, inv_perm]
         new_causal_context.append(combined_dict)
 
-        return coords, occlusion, expected_dist, new_causal_context
+        return points, occlusion, expected_dist, new_causal_context
 
     def refine_pips(self,
             target_feature,
@@ -359,8 +321,7 @@ class TAPIR(nn.Module):
             orig_hw,
             last_iter=None,
             resize_hw=None,
-            causal_context=None,
-            get_causal_context=False):
+            causal_context=None):
 
         orig_h, orig_w = orig_hw
         resized_h, resized_w = resize_hw
@@ -428,9 +389,7 @@ class TAPIR(nn.Module):
             b, n, *_ = v.shape
             causal_context[k] = v.view(b * n, *v.shape[2:])
 
-        res, new_causal_context = self.torch_pips_mixer(
-            x.unsqueeze(1).float(), causal_context, get_causal_context
-        )
+        res, new_causal_context = self.torch_pips_mixer(x.unsqueeze(1).float(), causal_context)
 
         n, _, c = res.shape
         b = mlp_input.shape[0]
