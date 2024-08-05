@@ -329,7 +329,3 @@ class TAPIR(nn.Module):
         occlusion = occlusion[..., 0]
 
         return points, occlusion, expected_dist
-
-    def construct_initial_causal_state(self, num_iters, num_points, num_resolutions=1):
-        """Construct initial causal state."""
-        return torch.zeros((num_iters, self.num_mixer_blocks, num_points, 2, 512+2048), dtype=torch.float32, device=self.device)
