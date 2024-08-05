@@ -23,41 +23,19 @@ import torch.nn.functional as F
 
 random = np.random.RandomState(2)
 
-# Ref (converted to use numpy and opencv): https://zenn.dev/pinto0309/scraps/7d4032067d0160
-def bilinear_grid_sample(im, grid, align_corners=False):
-    n, c, h, w = im.shape
-    gn, gh, gw, _ = grid.shape
-    assert n == gn
+def map_coordinates_2d(feats: torch.Tensor, coordinates: torch.Tensor) -> torch.Tensor:
+    n, h, w, c = feats.shape
+    x = feats.permute(0, 3, 1, 2)
 
-    x = grid[:, :, :, 0]
-    y = grid[:, :, :, 1]
+    y = coordinates[:, :, None, :]
+    y = 2 * (y / torch.tensor(x.shape[2:], device=y.device)) - 1
+    y = torch.flip(y, dims=(-1,)).float()
 
-    if align_corners:
-        x = ((x + 1) / 2) * (w - 1)
-        y = ((y + 1) / 2) * (h - 1)
-    else:
-        x = ((x + 1) * w - 1) / 2
-        y = ((y + 1) * h - 1) / 2
-
-    x = x.reshape(n, gh, gw).astype(np.float32)
-    y = y.reshape(n, gh, gw).astype(np.float32)
-
-    result = np.zeros((1, c, gh, gw), dtype=im.dtype)
-
-    for j in range(c):
-        result[0, j] = cv2.remap(im[0, j], x[0], y[0], interpolation=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-
-    return result
-
-def map_coordinates_2d(feats: np.ndarray, coordinates: np.ndarray) -> np.ndarray:
-
-    y = 2 * (coordinates / np.array(feats.shape[2:0:-1], dtype=np.float32)) - 1
-    y = y[np.newaxis, :, np.newaxis, :]
-    x = feats.transpose(0, 3, 1, 2)
-
-    out = bilinear_grid_sample(x, y)
-    out = np.squeeze(out, axis=-1)
-    out = np.transpose(out, (0, 2, 1))
+    out = F.grid_sample(
+        x, y, mode='bilinear', align_corners=False, padding_mode='border'
+    )
+    out = out.squeeze(dim=-1)
+    out = out.permute(0, 2, 1)
     return out
 
 def map_sampled_coordinates_2d(feats: torch.Tensor, coordinates: torch.Tensor) -> torch.Tensor:
@@ -96,7 +74,7 @@ def soft_argmax_heatmap_batched(softmax_val, threshold=5):
                     coords[None, None, :, :, :] - pos[:, :, None, None, :]
                 ),
                 dim=-1,
-                keepdims=True,
+                keepdim=True,
             )
             < threshold ** 2
     )
@@ -186,7 +164,7 @@ def sample_grid_points(height, width, num_points):
     x, y = np.meshgrid(x, y)
     x = np.expand_dims(x.flatten(), -1)
     y = np.expand_dims(y.flatten(), -1)
-    points = np.concatenate((x, y), axis=-1).astype(np.int32)  # [num_points, 2]
+    points = np.concatenate((y, x), axis=-1).astype(np.int32)  # [num_points, 2]
     return points
 
 def sample_random_points(height, width, num_points):
@@ -202,15 +180,29 @@ def postprocess_occlusions(occlusions, expected_dist):
     visibles = (1 - F.sigmoid(occlusions)) * (1 - F.sigmoid(expected_dist)) > 0.5
     return visibles
 
-def get_query_features(query_points: np.ndarray,
-                       feature_grid: np.ndarray,
-                       hires_feats_grid: np.ndarray,
-                       initial_resolution:np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def get_query_features(query_points: torch.Tensor,
+                       feature_grid: torch.Tensor,
+                       hires_feats_grid: torch.Tensor,
+                       initial_resolution: tuple[int, int]) -> tuple[torch.Tensor, torch.Tensor]:
 
-    position_in_grid = query_points * feature_grid.shape[1:3] / initial_resolution
-    position_in_grid_hires = query_points * hires_feats_grid.shape[1:3] / initial_resolution
+    # torch.Size([1, 1, 64, 64, 128]) torch.Size([1, 256, 2]) torch.Size([1, 32, 32, 256]) torch.Size([256, 256])
+    print(query_points.shape, feature_grid.shape, hires_feats_grid.shape, initial_resolution)
 
-    query_feats = map_coordinates_2d(feature_grid, position_in_grid)
-    hires_query_feats = map_coordinates_2d(hires_feats_grid, position_in_grid_hires)
+    position_in_grid = convert_grid_coordinates(
+        query_points,
+        torch.tensor(initial_resolution).to(query_points.device),
+        feature_grid.shape[1:3]
+    )
 
+    position_in_grid_hires = convert_grid_coordinates(
+        query_points,
+        torch.tensor(initial_resolution).to(query_points.device),
+        hires_feats_grid.shape[1:3]
+    )
+    query_feats = map_coordinates_2d(
+        feature_grid, position_in_grid
+    )
+    hires_query_feats = map_coordinates_2d(
+        hires_feats_grid, position_in_grid_hires
+    )
     return query_feats, hires_query_feats

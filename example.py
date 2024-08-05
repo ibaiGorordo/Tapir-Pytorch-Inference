@@ -7,7 +7,6 @@ import tapnet.utils as utils
 from tapnet import tapir_model
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
 random = np.random.RandomState(2)
 
 
@@ -20,39 +19,26 @@ def build_model(model_path: str, input_resolution: tuple[int, int], num_pips_ite
     model = model.eval()
     return model
 
-
-def set_points(predictor, frame, query_points):
+def set_points(predictor, encoder, frame, query_points, device):
     # Runs the model on the frame and randome query features, to get the feature grids
     # Then, it calculates the query features for the query points using the feature grids
 
-    # Initialize causal state, feature grid and hires feature grid
-    causal_state = torch.zeros(
-        (predictor.model.num_pips_iter, predictor.model.num_mixer_blocks, num_points, 2, 512 + 2048),
-        dtype=torch.float32, device=predictor.device)
-    query_feats = torch.zeros((1, 256, 256), dtype=torch.float32, device=predictor.device)
-    hires_query_feats = torch.zeros((1, 256, 128), dtype=torch.float32, device=predictor.device)
+    # Initialize causal state, query_feats and hires_query_feats
+    causal_state_shape = (predictor.model.num_pips_iter, predictor.model.num_mixer_blocks, num_points, 2, 512 + 2048)
+    causal_state = torch.zeros(causal_state_shape, dtype=torch.float32, device=device)
+    query_feats = torch.zeros((1, 256, 256), dtype=torch.float32, device=device)
+    hires_query_feats = torch.zeros((1, 256, 128), dtype=torch.float32, device=device)
 
     _, _, _, feature_grid, hires_feats_grid = predictor(frame, query_feats, hires_query_feats, causal_state)
 
-    feature_grid = feature_grid.cpu().numpy()
-    hires_feats_grid = hires_feats_grid.cpu().numpy()
-
-    query_feats, hires_query_feats = utils.get_query_features(query_points, feature_grid, hires_feats_grid,
-                                                              predictor.input_resolution)
-
-    query_feats = torch.tensor(query_feats).to(predictor.device).float()
-    hires_query_feats = torch.tensor(hires_query_feats).to(predictor.device).float()
+    query_feats, hires_query_feats = encoder(query_points[None], feature_grid, hires_feats_grid, frame.shape[2:])
 
     return query_feats, hires_query_feats, causal_state
 
-
 class TapirPredictor(nn.Module):
-    def __init__(self, model_path: str, input_resolution: tuple[int, int], num_pips_iter: int = 4,
-                 use_casual_conv: bool = True, device: torch.device = device):
+    def __init__(self, model: tapir_model.TAPIR):
         super().__init__()
-        self.model = build_model(model_path, input_resolution, num_pips_iter, use_casual_conv, device)
-        self.device = device
-        self.input_resolution = input_resolution
+        self.model = model
 
     @torch.inference_mode()
     def forward(self, frame, query_feats, hires_query_feats, causal_context):
@@ -69,6 +55,16 @@ class TapirPredictor(nn.Module):
         return tracks, visibles, causal_context, feature_grid, hires_feats_grid
 
 
+class TapirPointEncoder(nn.Module):
+    def __init__(self, model: tapir_model.TAPIR):
+        super().__init__()
+        self.model = model
+
+    @torch.inference_mode()
+    def forward(self, query_points, feature_grid, hires_feats_grid, initial_resolution):
+        return utils.get_query_features(query_points, feature_grid, hires_feats_grid, initial_resolution)
+
+
 if __name__ == '__main__':
     resize_height = 256
     resize_width = 256
@@ -76,6 +72,7 @@ if __name__ == '__main__':
     num_iters = 4
 
     query_points = utils.sample_grid_points(resize_height, resize_width, num_points)
+    query_points = torch.tensor(query_points).to(device)
     point_colors = random.randint(0, 255, (num_points, 3))
 
     # cap = cv2.VideoCapture('https://storage.googleapis.com/dm-tapnet/horsejump-high.mp4')
@@ -83,13 +80,17 @@ if __name__ == '__main__':
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    predictor = TapirPredictor('causal_bootstapir_checkpoint.pt', (resize_height, resize_width),
-                               num_pips_iter=num_iters, device=device)
+    model = build_model('causal_bootstapir_checkpoint.pt', (resize_height, resize_width), num_iters, True, device)
+    predictor = TapirPredictor(model).to(device)
+    enconder = TapirPointEncoder(model).to(device)
 
     # Initialize query features
     ret, frame = cap.read()
     input_frame = utils.preprocess_frame(frame)
-    query_feats, hires_query_feats, causal_state = set_points(predictor, input_frame, query_points)
+    query_feats, hires_query_feats, causal_state = set_points(predictor, enconder, input_frame, query_points, device)
+    print(query_feats.shape, hires_query_feats.shape, causal_state.shape)
+
+    out = cv2.VideoWriter('output.avi', cv2.VideoWriter_fourcc(*'XVID'), 30, (width, height))
 
     # Reset video to the beginning
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -110,6 +111,7 @@ if __name__ == '__main__':
         tracks[:, 1] = tracks[:, 1] * height / resize_height
 
         frame = utils.draw_points(frame, tracks, visibles, point_colors)
+        out.write(frame)
 
         cv2.imshow('frame', frame)
         if cv2.waitKey(100) & 0xFF == ord('q'):
