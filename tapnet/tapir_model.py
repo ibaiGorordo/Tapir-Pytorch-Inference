@@ -273,7 +273,7 @@ class TAPIR(nn.Module):
             ctx = torch.stack([ctxy, ctxx], dim=-1)
             ctx = ctx.reshape(-1, 2).to(coords.device)
             coords2 = coords.unsqueeze(2) + ctx.unsqueeze(0).unsqueeze(0)
-            neighborhood = utils.map_smpled_coordinates_2d(grid, coords2)
+            neighborhood = utils.map_sampled_coordinates_2d(grid, coords2)
 
             # s is spatial context size
             if last_iter_query is None:

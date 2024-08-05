@@ -23,73 +23,47 @@ import torch.nn.functional as F
 
 random = np.random.RandomState(2)
 
-def bilinear(x: torch.Tensor, resolution: tuple[int, int]) -> torch.Tensor:
-    """Resizes a 5D tensor using bilinear interpolation.
+# Ref (converted to use numpy and opencv): https://zenn.dev/pinto0309/scraps/7d4032067d0160
+def bilinear_grid_sample(im, grid, align_corners=False):
+    n, c, h, w = im.shape
+    gn, gh, gw, _ = grid.shape
+    assert n == gn
 
-    Args:
-          x: A 5D tensor of shape (B, T, W, H, C) where B is batch size, T is
-            time, W is width, H is height, and C is the number of channels.
-      resolution: The target resolution as a tuple (new_width, new_height).
+    x = grid[:, :, :, 0]
+    y = grid[:, :, :, 1]
 
-    Returns:
-      The resized tensor.
-    """
-    b, t, h, w, c = x.size()
-    x = x.permute(0, 1, 4, 2, 3).reshape(b, t * c, h, w)
-    x = F.interpolate(x, size=resolution, mode='bilinear', align_corners=False)
-    b, _, h, w = x.size()
-    x = x.reshape(b, t, c, h, w).permute(0, 1, 3, 4, 2)
-    return x
+    if align_corners:
+        x = ((x + 1) / 2) * (w - 1)
+        y = ((y + 1) / 2) * (h - 1)
+    else:
+        x = ((x + 1) * w - 1) / 2
+        y = ((y + 1) * h - 1) / 2
 
+    x = x.reshape(n, gh, gw).astype(np.float32)
+    y = y.reshape(n, gh, gw).astype(np.float32)
 
-def map_coordinates_3d(
-        feats: torch.Tensor, coordinates: torch.Tensor
-) -> torch.Tensor:
-    """Maps 3D coordinates to corresponding features using bilinear interpolation.
+    print(n, c, im.shape, x.shape, y.shape)
 
-    Args:
-      feats: A 5D tensor of features with shape (B, W, H, D, C), where B is batch
-        size, W is width, H is height, D is depth, and C is the number of
-        channels.
-      coordinates: A 3D tensor of coordinates with shape (B, N, 3), where N is the
-        number of coordinates and the last dimension represents (W, H, D)
-        coordinates.
+    result = np.zeros((1, c, gh, gw), dtype=im.dtype)
 
-    Returns:
-      The mapped features tensor.
-    """
-    x = feats.permute(0, 4, 1, 2, 3)
-    y = coordinates[:, :, None, None, :].float()
-    y[..., 0] += 0.5
-    y = 2 * (y / torch.tensor(x.shape[2:], device=y.device)) - 1
-    y = torch.flip(y, dims=(-1,))
-    out = (
-        F.grid_sample(
-            x, y, mode='bilinear', align_corners=False, padding_mode='border'
-        )
-    )
-    out = out.squeeze(dim=(3, 4))
-    out = out.permute(0, 2, 1)
+    for j in range(c):
+        result[0, j] = cv2.remap(im[0, j], x[0], y[0], interpolation=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+
+    return result
+
+def map_coordinates_2d(feats: np.ndarray, coordinates: np.ndarray) -> np.ndarray:
+
+    y = 2 * (coordinates / np.array(feats.shape[2:0:-1], dtype=np.float32)) - 1
+    y = y[np.newaxis, :, np.newaxis, :]
+    x = feats.transpose(0, 3, 1, 2)
+
+    out = bilinear_grid_sample(x, y)
+    print(out.shape)
+    out = np.squeeze(out, axis=-1)
+    out = np.transpose(out, (0, 2, 1))
     return out
 
-
-def map_coordinates_2d(feats: torch.Tensor, coordinates: torch.Tensor) -> torch.Tensor:
-    n, h, w, c = feats.shape
-    x = feats.permute(0, 3, 1, 2)
-
-    y = coordinates[:, :, None, :]
-    y = 2 * (y / torch.tensor(x.shape[2:], device=y.device)) - 1
-    y = torch.flip(y, dims=(-1,)).float()
-
-    out = F.grid_sample(
-        x, y, mode='bilinear', align_corners=False, padding_mode='border'
-    )
-    out = out.squeeze(dim=-1)
-    out = out.permute(0, 2, 1)
-    return out
-
-
-def map_smpled_coordinates_2d(feats: torch.Tensor, coordinates: torch.Tensor) -> torch.Tensor:
+def map_sampled_coordinates_2d(feats: torch.Tensor, coordinates: torch.Tensor) -> torch.Tensor:
     n, h, w, c = feats.shape
     x = feats.permute(0, 3, 1, 2).view(n, c, h, w)
 
@@ -165,17 +139,10 @@ def heatmaps_to_points(
     )
     return out_points
 
-
-def is_same_res(r1, r2):
-    """Test if two image resolutions are the same."""
-    return all([x == y for x, y in zip(r1, r2)])
-
-
 def convert_grid_coordinates(
         coords: torch.Tensor,
         input_grid_size: Sequence[int],
-        output_grid_size: Sequence[int],
-        coordinate_format: str = 'xy',
+        output_grid_size: Sequence[int]
 ) -> torch.Tensor:
     """Convert grid coordinates to correct format."""
     if isinstance(input_grid_size, tuple):
@@ -183,71 +150,10 @@ def convert_grid_coordinates(
     if isinstance(output_grid_size, tuple):
         output_grid_size = torch.tensor(output_grid_size, device=coords.device)
 
-    if coordinate_format == 'xy':
-        if input_grid_size.shape[0] != 2 or output_grid_size.shape[0] != 2:
-            raise ValueError(
-                'If coordinate_format is xy, the shapes must be length 2.'
-            )
-    elif coordinate_format == 'tyx':
-        if input_grid_size.shape[0] != 3 or output_grid_size.shape[0] != 3:
-            raise ValueError(
-                'If coordinate_format is tyx, the shapes must be length 3.'
-            )
-        if input_grid_size[0] != output_grid_size[0]:
-            raise ValueError('converting frame count is not supported.')
-    else:
-        raise ValueError('Recognized coordinate formats are xy and tyx.')
-
     position_in_grid = coords
     position_in_grid = position_in_grid * output_grid_size / input_grid_size
 
     return position_in_grid
-
-
-def generate_default_resolutions(full_size, train_size, num_levels=None):
-    """Generate a list of logarithmically-spaced resolutions.
-
-    Generated resolutions are between train_size and full_size, inclusive, with
-    num_levels different resolutions total.  Useful for generating the input to
-    refinement_resolutions in PIPs.
-
-    Args:
-      full_size: 2-tuple of ints.  The full image size desired.
-      train_size: 2-tuple of ints.  The smallest refinement level.  Should
-        typically match the training resolution, which is (256, 256) for TAPIR.
-      num_levels: number of levels.  Typically each resolution should be less than
-        twice the size of prior resolutions.
-
-    Returns:
-      A list of resolutions.
-    """
-    if all([x == y for x, y in zip(train_size, full_size)]):
-        return [train_size]
-
-    if num_levels is None:
-        size_ratio = np.array(full_size) / np.array(train_size)
-        num_levels = int(np.ceil(np.max(np.log2(size_ratio))) + 1)
-
-    if num_levels <= 1:
-        return [train_size]
-
-    h, w = full_size[0:2]
-    if h % 8 != 0 or w % 8 != 0:
-        print(
-            'Warning: output size is not a multiple of 8. Final layer '
-            + 'will round size down.'
-        )
-    ll_h, ll_w = train_size[0:2]
-
-    sizes = []
-    for i in range(num_levels):
-        size = (
-            int(round((ll_h * (h / ll_h) ** (i / (num_levels - 1))) // 8)) * 8,
-            int(round((ll_w * (w / ll_w) ** (i / (num_levels - 1))) // 8)) * 8,
-        )
-        sizes.append(size)
-    return sizes
-
 
 def draw_points(frame, points, visible, colors):
     for i in range(points.shape[0]):
@@ -283,7 +189,7 @@ def sample_grid_points(height, width, num_points):
     x, y = np.meshgrid(x, y)
     x = np.expand_dims(x.flatten(), -1)
     y = np.expand_dims(y.flatten(), -1)
-    points = np.concatenate((y, x), axis=-1).astype(np.int32)  # [num_points, 2]
+    points = np.concatenate((x, y), axis=-1).astype(np.int32)  # [num_points, 2]
     return points
 
 def sample_random_points(height, width, num_points):
@@ -299,28 +205,15 @@ def postprocess_occlusions(occlusions, expected_dist):
     visibles = (1 - F.sigmoid(occlusions)) * (1 - F.sigmoid(expected_dist)) > 0.5
     return visibles
 
-def get_query_features(query_points: torch.Tensor,
-                       feature_grid: torch.Tensor,
-                       hires_feats_grid: torch.Tensor,
-                       initial_resolution: tuple[int, int]) -> tuple[torch.Tensor, torch.Tensor]:
+def get_query_features(query_points: np.ndarray,
+                       feature_grid: np.ndarray,
+                       hires_feats_grid: np.ndarray,
+                       initial_resolution:np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
-    position_in_grid = convert_grid_coordinates(
-        query_points,
-        torch.tensor(initial_resolution).to(query_points.device),
-        feature_grid.shape[1:3],
-        coordinate_format='xy',
-    )
+    position_in_grid = query_points * feature_grid.shape[1:3] / initial_resolution
+    position_in_grid_hires = query_points * hires_feats_grid.shape[1:3] / initial_resolution
 
-    position_in_grid_hires = convert_grid_coordinates(
-        query_points,
-        torch.tensor(initial_resolution).to(query_points.device),
-        hires_feats_grid.shape[1:3],
-        coordinate_format='xy',
-    )
-    query_feats = map_coordinates_2d(
-        feature_grid, position_in_grid
-    )
-    hires_query_feats = map_coordinates_2d(
-        hires_feats_grid, position_in_grid_hires
-    )
+    query_feats = map_coordinates_2d(feature_grid, position_in_grid)
+    hires_query_feats = map_coordinates_2d(hires_feats_grid, position_in_grid_hires)
+
     return query_feats, hires_query_feats

@@ -20,16 +20,25 @@ def online_model_init(frame, query_points):
     """Initialize query features for the query points."""
     frame = utils.preprocess_frame(frame, resize=(resize_height, resize_width))
     feature_grid, hires_feats_grid = model.get_feature_grids(frame)
-    query_feats, hires_query_feats = model.get_query_features(
+
+    feature_grid = feature_grid.cpu().numpy()
+    hires_feats_grid = hires_feats_grid.cpu().numpy()
+
+    query_feats, hires_query_feats = utils.get_query_features(
         query_points=query_points,
         feature_grid=feature_grid,
         hires_feats_grid=hires_feats_grid,
+        initial_resolution=(resize_height, resize_width),
     )
     return query_feats, hires_query_feats
 
 
 @torch.inference_mode()
 def online_model_predict(frame, query_feats, hires_query_feats, causal_context, fast=True):
+
+    query_feats = torch.tensor(query_feats).to(device).float()
+    hires_query_feats = torch.tensor(hires_query_feats).to(device).float()
+
     """Compute point tracks and occlusions given frame and query points."""
     frame = utils.preprocess_frame(frame, resize=(resize_height, resize_width))
     feature_grid, hires_feats_grid = model.get_feature_grids(frame)
@@ -64,12 +73,11 @@ if __name__ == '__main__':
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     query_points = utils.sample_grid_points(resize_height, resize_width, num_points)
-    query_points = torch.tensor(query_points).to(device)
     point_colors = random.randint(0, 255, (num_points, 3))
 
     # Initialize query features
     ret, frame = cap.read()
-    query_feats, hires_query_feats = online_model_init(frame, query_points[None])
+    query_feats, hires_query_feats = online_model_init(frame, query_points)
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
