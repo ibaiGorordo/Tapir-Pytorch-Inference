@@ -298,3 +298,29 @@ def sample_random_points(height, width, num_points):
 def postprocess_occlusions(occlusions, expected_dist):
     visibles = (1 - F.sigmoid(occlusions)) * (1 - F.sigmoid(expected_dist)) > 0.5
     return visibles
+
+def get_query_features(query_points: torch.Tensor,
+                       feature_grid: torch.Tensor,
+                       hires_feats_grid: torch.Tensor,
+                       initial_resolution: tuple[int, int]) -> tuple[torch.Tensor, torch.Tensor]:
+
+    position_in_grid = convert_grid_coordinates(
+        query_points,
+        torch.tensor(initial_resolution).to(query_points.device),
+        feature_grid.shape[1:3],
+        coordinate_format='xy',
+    )
+
+    position_in_grid_hires = convert_grid_coordinates(
+        query_points,
+        torch.tensor(initial_resolution).to(query_points.device),
+        hires_feats_grid.shape[1:3],
+        coordinate_format='xy',
+    )
+    query_feats = map_coordinates_2d(
+        feature_grid, position_in_grid
+    )
+    hires_query_feats = map_coordinates_2d(
+        hires_feats_grid, position_in_grid_hires
+    )
+    return query_feats, hires_query_feats

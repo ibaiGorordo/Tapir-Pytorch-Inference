@@ -93,33 +93,6 @@ class TAPIR(nn.Module):
         else:
             self.extra_convs = None
 
-    def get_query_features(
-            self,
-            query_points: torch.Tensor,
-            feature_grid: torch.Tensor,
-            hires_feats_grid: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-
-        position_in_grid = utils.convert_grid_coordinates(
-            query_points,
-            torch.tensor([self.initial_resolution[0], self.initial_resolution[1]]).to(query_points.device),
-            feature_grid.shape[1:3],
-            coordinate_format='xy',
-        )
-
-        position_in_grid_hires = utils.convert_grid_coordinates(
-            query_points,
-            torch.tensor([self.initial_resolution[0], self.initial_resolution[1]]).to(query_points.device),
-            hires_feats_grid.shape[1:3],
-            coordinate_format='xy',
-        )
-        query_feats = utils.map_coordinates_2d(
-            feature_grid, position_in_grid
-        )
-        hires_query_feats = utils.map_coordinates_2d(
-            hires_feats_grid, position_in_grid_hires
-        )
-        return query_feats, hires_query_feats
 
     def get_feature_grids(self,frame: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         resnet_out = self.resnet_torch(frame)
@@ -156,7 +129,6 @@ class TAPIR(nn.Module):
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
 
         num_iters = self.num_pips_iter
-
 
         num_queries = query_feats.shape[1]
         perm = torch.arange(num_queries)
