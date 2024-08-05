@@ -24,7 +24,6 @@ import torch.nn.functional as F
 random = np.random.RandomState(2)
 
 def map_coordinates_2d(feats: torch.Tensor, coordinates: torch.Tensor) -> torch.Tensor:
-    n, h, w, c = feats.shape
     x = feats.permute(0, 3, 1, 2)
 
     y = coordinates[:, :, None, :]
@@ -130,19 +129,6 @@ def convert_grid_coordinates(
 
     return position_in_grid
 
-def draw_points(frame, points, visible, colors):
-    for i in range(points.shape[0]):
-        if not visible[i]:
-            continue
-
-        point = points[i,:]
-        color = colors[i,:]
-        cv2.circle(frame,
-                   (int(point[0]), int(point[1])),
-                   5,
-                   (int(color[0]), int(color[1]), int(color[2])),
-                   -1)
-    return frame
 
 def preprocess_frame(frame, resize=(256, 256), device='cuda'):
 
@@ -185,18 +171,15 @@ def get_query_features(query_points: torch.Tensor,
                        hires_feats_grid: torch.Tensor,
                        initial_resolution: tuple[int, int]) -> tuple[torch.Tensor, torch.Tensor]:
 
-    # torch.Size([1, 1, 64, 64, 128]) torch.Size([1, 256, 2]) torch.Size([1, 32, 32, 256]) torch.Size([256, 256])
-    print(query_points.shape, feature_grid.shape, hires_feats_grid.shape, initial_resolution)
-
     position_in_grid = convert_grid_coordinates(
         query_points,
-        torch.tensor(initial_resolution).to(query_points.device),
+        initial_resolution,
         feature_grid.shape[1:3]
     )
 
     position_in_grid_hires = convert_grid_coordinates(
         query_points,
-        torch.tensor(initial_resolution).to(query_points.device),
+        initial_resolution,
         hires_feats_grid.shape[1:3]
     )
     query_feats = map_coordinates_2d(
@@ -206,3 +189,4 @@ def get_query_features(query_points: torch.Tensor,
         hires_feats_grid, position_in_grid_hires
     )
     return query_feats, hires_query_feats
+
