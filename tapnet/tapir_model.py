@@ -148,26 +148,11 @@ class TAPIR(nn.Module):
         new_causal_context = []
         mixer_feats = None
         for i in range(num_iters):
-            queries = [
-                hires_query_feats,
-                query_feats,
-            ]
 
-            for _ in range(self.pyramid_level):
-                queries.append(queries[-1])
-            pyramid = [
-                hires_feats_grid,
-                feature_grid,
-            ]
-            for _ in range(self.pyramid_level):
-                pyramid.append(
-                    F.avg_pool3d(
-                        pyramid[-1],
-                        kernel_size=(2, 2, 1),
-                        stride=(2, 2, 1),
-                        padding=0,
-                    )
-                )
+            queries = [hires_query_feats, query_feats, query_feats]
+            feature_grid_avg = F.avg_pool3d(feature_grid, kernel_size=(2, 2, 1), stride=(2, 2, 1), padding=0)
+            pyramid = [hires_feats_grid, feature_grid, feature_grid_avg]
+
             refined = self.refine_pips(
                 queries,
                 pyramid,
@@ -184,65 +169,6 @@ class TAPIR(nn.Module):
             new_causal_context.append(cc)
 
         new_causal_context = torch.cat(new_causal_context, dim=0)
-
-        return points, occlusion, expected_dist, new_causal_context
-
-    def estimate_trajectories_fast(
-            self,
-            feature_grid: torch.Tensor,
-            hires_feats_grid: torch.Tensor,
-            query_feats: torch.Tensor,
-            hires_query_feats: torch.Tensor,
-            causal_context: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-
-        num_queries = query_feats.shape[1]
-        perm = torch.arange(num_queries)
-
-        inv_perm = torch.zeros_like(perm)
-        inv_perm[perm] = torch.arange(num_queries)
-
-        points, occlusion, expected_dist = self.tracks_from_cost_volume(
-            query_feats,
-            feature_grid,
-            None,
-            im_shp=feature_grid.shape[0:1]
-                   + self.initial_resolution
-                   + (3,),
-        )
-
-        queries = [
-            hires_query_feats,
-            query_feats,
-        ]
-
-        for _ in range(self.pyramid_level):
-            queries.append(queries[-1])
-        pyramid = [
-            hires_feats_grid,
-            feature_grid,
-        ]
-        for _ in range(self.pyramid_level):
-            pyramid.append(
-                F.avg_pool3d(
-                    pyramid[-1],
-                    kernel_size=(2, 2, 1),
-                    stride=(2, 2, 1),
-                    padding=0,
-                )
-            )
-        refined = self.refine_pips(
-            queries,
-            pyramid,
-            points,
-            occlusion,
-            expected_dist,
-            orig_hw=self.initial_resolution,
-            last_iter=None,
-            resize_hw=self.initial_resolution,
-            causal_context=causal_context[0,...],
-        )
-        points, occlusion, expected_dist, mixer_feats, new_causal_context = refined
 
         return points, occlusion, expected_dist, new_causal_context
 

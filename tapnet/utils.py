@@ -42,8 +42,6 @@ def bilinear_grid_sample(im, grid, align_corners=False):
     x = x.reshape(n, gh, gw).astype(np.float32)
     y = y.reshape(n, gh, gw).astype(np.float32)
 
-    print(n, c, im.shape, x.shape, y.shape)
-
     result = np.zeros((1, c, gh, gw), dtype=im.dtype)
 
     for j in range(c):
@@ -58,7 +56,6 @@ def map_coordinates_2d(feats: np.ndarray, coordinates: np.ndarray) -> np.ndarray
     x = feats.transpose(0, 3, 1, 2)
 
     out = bilinear_grid_sample(x, y)
-    print(out.shape)
     out = np.squeeze(out, axis=-1)
     out = np.transpose(out, (0, 2, 1))
     return out
