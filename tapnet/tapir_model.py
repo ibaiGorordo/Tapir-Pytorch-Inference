@@ -144,7 +144,6 @@ class TAPIR(nn.Module):
                    + self.initial_resolution
                    + (3,),
         )
-
         new_causal_context = []
         mixer_feats = None
         for i in range(num_iters):
@@ -161,7 +160,6 @@ class TAPIR(nn.Module):
                 expected_dist,
                 orig_hw=self.initial_resolution,
                 last_iter=mixer_feats,
-                resize_hw=self.initial_resolution,
                 causal_context=causal_context[i,...],
             )
 
@@ -174,10 +172,10 @@ class TAPIR(nn.Module):
 
     def refine_pips(self, target_feature, pyramid,
                     pos_guess, occ_guess, expd_guess,
-                    orig_hw, last_iter, resize_hw, causal_context) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+                    orig_hw, last_iter, causal_context) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+
 
         orig_h, orig_w = orig_hw
-        resized_h, resized_w = resize_hw
         corrs_pyr = []
         assert len(target_feature) == len(pyramid)
         for pyridx, (query, grid) in enumerate(zip(target_feature, pyramid)):
@@ -237,17 +235,15 @@ class TAPIR(nn.Module):
         )
         b, n, c = mlp_input.shape
         x = mlp_input.view(b * n, c)
+
         res, new_causal_context = self.torch_pips_mixer(x.unsqueeze(1).float(), causal_context)
 
         n, _, c = res.shape
         b = mlp_input.shape[0]
         res = res.view(b, n, c)
 
-        pos_update = utils.convert_grid_coordinates(
-            res[..., :2],
-            (resized_w, resized_h),
-            (orig_w, orig_h),
-        )
+        pos_update = res[..., :2]
+
         return (
             pos_update + pos_guess,
             res[..., 2] + occ_guess,

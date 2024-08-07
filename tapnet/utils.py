@@ -39,7 +39,7 @@ def map_coordinates_2d(feats: torch.Tensor, coordinates: torch.Tensor) -> torch.
 
 def map_sampled_coordinates_2d(feats: torch.Tensor, coordinates: torch.Tensor) -> torch.Tensor:
     n, h, w, c = feats.shape
-    x = feats.permute(0, 3, 1, 2).view(n, c, h, w)
+    x = feats.permute(0, 3, 1, 2)
 
     y = coordinates
 
@@ -182,6 +182,7 @@ def get_query_features(query_points: torch.Tensor,
         initial_resolution,
         hires_feats_grid.shape[1:3]
     )
+
     query_feats = map_coordinates_2d(
         feature_grid, position_in_grid
     )

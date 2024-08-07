@@ -44,9 +44,9 @@ def draw_points(frame, points, visible, colors):
 
 
 if __name__ == '__main__':
-    resize_height = 256
-    resize_width = 256
-    num_points = 256
+    resize_height = 320
+    resize_width = 320
+    num_points = 625
     num_iters = 4
 
     query_points = sample_grid_points(resize_height, resize_width, num_points)
@@ -63,7 +63,7 @@ if __name__ == '__main__':
 
     # Initialize query features
     ret, frame = cap.read()
-    input_frame = preprocess_frame(frame)
+    input_frame = preprocess_frame(frame, resize=(resize_width, resize_height))
     query_feats, hires_query_feats, causal_state = set_points(predictor, enconder, input_frame, query_points, device)
 
     out = cv2.VideoWriter('output.avi', cv2.VideoWriter_fourcc(*'XVID'), 30, (width, height))
@@ -76,7 +76,7 @@ if __name__ == '__main__':
             break
 
         # Preprocess frame
-        input_frame = preprocess_frame(frame, resize=(resize_height, resize_width))
+        input_frame = preprocess_frame(frame, resize=(resize_width, resize_height))
 
         # Run the model
         tracks, visibles, causal_state, _, _ = predictor(input_frame, query_feats, hires_query_feats, causal_state)
@@ -84,6 +84,7 @@ if __name__ == '__main__':
         # Postprocess frame
         visibles = visibles.cpu().numpy().squeeze()
         tracks = tracks.cpu().numpy().squeeze()
+
         tracks[:, 0] = tracks[:, 0] * width / resize_width
         tracks[:, 1] = tracks[:, 1] * height / resize_height
 
