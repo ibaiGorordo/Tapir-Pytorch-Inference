@@ -154,11 +154,8 @@ def sample_grid_points(height, width, num_points):
     return points
 
 def sample_random_points(height, width, num_points):
-    x = random.randint(0, width-1, int(np.sqrt(num_points)))
-    y = random.randint(0, height-1, int(np.sqrt(num_points)))
-    x, y = np.meshgrid(x, y)
-    x = np.expand_dims(x.flatten(), -1)
-    y = np.expand_dims(y.flatten(), -1)
+    x = random.randint(0, width-1, (num_points, 1))
+    y = random.randint(0, height-1, (num_points, 1))
     points = np.concatenate((y, x), axis=-1).astype(np.int32)  # [num_points, 2]
     return points
 

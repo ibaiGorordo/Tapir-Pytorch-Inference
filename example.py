@@ -2,7 +2,7 @@ import numpy as np
 import cv2
 import torch
 
-from tapnet.utils import sample_grid_points, preprocess_frame
+from tapnet.utils import sample_random_points, preprocess_frame
 from tapnet.tapir_inference import TapirPredictor, TapirPointEncoder, build_model
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -22,6 +22,7 @@ def set_points(predictor: TapirPredictor, encoder: TapirPointEncoder, frame: tor
     input_resolution = torch.tensor(frame.shape[2:]).to(device)
 
     _, _, _, feature_grid, hires_feats_grid = predictor(frame, query_feats, hires_query_feats, causal_state)
+    print(feature_grid.shape, hires_feats_grid.shape)
 
     query_feats, hires_query_feats = encoder(query_points[None], feature_grid, hires_feats_grid, input_resolution)
 
@@ -37,19 +38,17 @@ def draw_points(frame, points, visible, colors):
         color = colors[i, :]
         cv2.circle(frame,
                    (int(point[0]), int(point[1])),
-                   5,
+                   3,
                    (int(color[0]), int(color[1]), int(color[2])),
                    -1)
     return frame
 
-
 if __name__ == '__main__':
-    resize_height = 320
-    resize_width = 320
-    num_points = 625
-    num_iters = 4
+    input_size = 480
+    num_points = 1000
+    num_iters = 4 # Use 1 for faster inference, and 4 for better results
 
-    query_points = sample_grid_points(resize_height, resize_width, num_points)
+    query_points = sample_random_points(input_size, input_size, num_points)
     query_points = torch.tensor(query_points).to(device)
     point_colors = random.randint(0, 255, (num_points, 3))
 
@@ -57,26 +56,27 @@ if __name__ == '__main__':
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    model = build_model('causal_bootstapir_checkpoint.pt', (resize_height, resize_width), num_iters, True, device)
+    model = build_model('causal_bootstapir_checkpoint.pt', (input_size, input_size), num_iters, True, device)
     predictor = TapirPredictor(model).to(device)
     enconder = TapirPointEncoder(model).to(device)
 
     # Initialize query features
     ret, frame = cap.read()
-    input_frame = preprocess_frame(frame, resize=(resize_width, resize_height))
+    input_frame = preprocess_frame(frame, resize=(input_size, input_size))
     query_feats, hires_query_feats, causal_state = set_points(predictor, enconder, input_frame, query_points, device)
-
-    out = cv2.VideoWriter('output.avi', cv2.VideoWriter_fourcc(*'XVID'), 30, (width, height))
 
     # Reset video to the beginning
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+    out = cv2.VideoWriter('output.avi', cv2.VideoWriter_fourcc(*'XVID'), 30, (width, height))
+    cv2.namedWindow('frame', cv2.WINDOW_NORMAL)
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
 
         # Preprocess frame
-        input_frame = preprocess_frame(frame, resize=(resize_width, resize_height))
+        input_frame = preprocess_frame(frame, resize=(input_size, input_size))
 
         # Run the model
         tracks, visibles, causal_state, _, _ = predictor(input_frame, query_feats, hires_query_feats, causal_state)
@@ -84,13 +84,12 @@ if __name__ == '__main__':
         # Postprocess frame
         visibles = visibles.cpu().numpy().squeeze()
         tracks = tracks.cpu().numpy().squeeze()
-
-        tracks[:, 0] = tracks[:, 0] * width / resize_width
-        tracks[:, 1] = tracks[:, 1] * height / resize_height
+        tracks[:, 0] = tracks[:, 0] * width / input_size
+        tracks[:, 1] = tracks[:, 1] * height / input_size
 
         frame = draw_points(frame, tracks, visibles, point_colors)
         out.write(frame)
 
         cv2.imshow('frame', frame)
-        if cv2.waitKey(100) & 0xFF == ord('q'):
+        if cv2.waitKey(1) & 0xFF == ord('q'):
             break
