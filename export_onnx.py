@@ -1,8 +1,8 @@
 import numpy as np
-import cv2
+import onnx
 import torch
+from onnxsim import simplify
 
-from tapnet.utils import sample_grid_points, preprocess_frame
 from tapnet.tapir_inference import TapirPredictor, TapirPointEncoder, build_model
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -15,7 +15,7 @@ if __name__ == '__main__':
     num_points = 256
     num_iters = 4
 
-    model = build_model('causal_bootstapir_checkpoint.pt', (resize_height, resize_width), num_iters, True, device)
+    model = build_model('models/causal_bootstapir_checkpoint.pt', (resize_height, resize_width), num_iters, True, device)
     predictor = TapirPredictor(model).to(device)
     encoder = TapirPointEncoder(model).to(device)
 
@@ -50,6 +50,13 @@ if __name__ == '__main__':
                       verbose=True,
                         input_names=['input_frame', 'query_feats', 'hires_query_feats', 'causal_state'],
                         output_names=['tracks', 'visibles', 'causal_state', 'feature_grid', 'hires_feats_grid'])
+
+    # Simplify model
+    model_simp, check = simplify('tapir_encoder.onnx')
+    onnx.save(model_simp, 'tapir_encoder_simplified.onnx')
+
+    model_simp, check = simplify('tapir.onnx')
+    onnx.save(model_simp, 'tapir_simplified.onnx')
 
 
 

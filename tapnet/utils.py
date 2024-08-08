@@ -188,3 +188,12 @@ def get_query_features(query_points: torch.Tensor,
     )
     return query_feats, hires_query_feats
 
+def draw_points(frame, points, visible, colors):
+    for i in range(points.shape[0]):
+        if not visible[i]:
+            continue
+
+        point = points[i, :]
+        color = colors[i, :].astype(np.uint8).tolist()
+        cv2.circle(frame, (int(point[0]), int(point[1])), 3, color, -1)
+    return frame
