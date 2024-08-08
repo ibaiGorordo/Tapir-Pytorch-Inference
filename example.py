@@ -1,5 +1,6 @@
 import cv2
 import torch
+import numpy as np
 
 import tapnet.utils as utils
 from tapnet.tapir_inference import TapirInference
@@ -25,16 +26,24 @@ if __name__ == '__main__':
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
     cv2.namedWindow('frame', cv2.WINDOW_NORMAL)
+
+    track_length = 10
+    tracks = np.zeros((num_points, track_length, 2), dtype=object)
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
 
         # Run the model
-        tracks, visibles = tapir(frame)
+        points, visibles = tapir(frame)
+
+        # Record visible points [num_points, 0, 2]
+        tracks = np.roll(tracks, 1, axis=1)
+        tracks[visibles, 0] = points[visibles]
+        tracks[~visibles, 0] = -1
 
         # Draw the results
-        frame = utils.draw_points(frame, tracks, visibles, point_colors)
+        frame = utils.draw_tracks(frame, tracks, point_colors)
 
         cv2.imshow('frame', frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):

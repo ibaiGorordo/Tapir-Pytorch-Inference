@@ -23,6 +23,7 @@ import torch.nn.functional as F
 
 random = np.random.RandomState(2)
 
+
 def map_coordinates_2d(feats: torch.Tensor, coordinates: torch.Tensor) -> torch.Tensor:
     x = feats.permute(0, 3, 1, 2)
 
@@ -36,6 +37,7 @@ def map_coordinates_2d(feats: torch.Tensor, coordinates: torch.Tensor) -> torch.
     out = out.squeeze(dim=-1)
     out = out.permute(0, 2, 1)
     return out
+
 
 def map_sampled_coordinates_2d(feats: torch.Tensor, coordinates: torch.Tensor) -> torch.Tensor:
     n, h, w, c = feats.shape
@@ -103,7 +105,6 @@ def heatmaps_to_points(
     out_points = soft_argmax_heatmap_batched(all_pairs_softmax, threshold)
     feature_grid_shape = all_pairs_softmax.shape[1:]
 
-
     # Note: out_points is now [x, y]; we need to divide by [width, height].
     # image_shape[3] is width and image_shape[2] is height.
     out_points = convert_grid_coordinates(
@@ -112,6 +113,7 @@ def heatmaps_to_points(
         image_shape[1:3],
     )
     return out_points
+
 
 def convert_grid_coordinates(
         coords: torch.Tensor,
@@ -131,7 +133,6 @@ def convert_grid_coordinates(
 
 
 def preprocess_frame(frame, resize=(256, 256), device='cuda'):
-
     input = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     input = cv2.resize(input, resize)
     input = input[np.newaxis, :, :, :].astype(np.float32)
@@ -143,6 +144,7 @@ def preprocess_frame(frame, resize=(256, 256), device='cuda'):
 
     return input
 
+
 def sample_grid_points(height, width, num_points):
     """Sample random points with (time, height, width) order."""
     x = np.linspace(0, width - 1, int(np.sqrt(num_points)))
@@ -153,21 +155,23 @@ def sample_grid_points(height, width, num_points):
     points = np.concatenate((y, x), axis=-1).astype(np.int32)  # [num_points, 2]
     return points
 
+
 def sample_random_points(height, width, num_points):
-    x = random.randint(0, width-1, (num_points, 1))
-    y = random.randint(0, height-1, (num_points, 1))
+    x = random.randint(0, width - 1, (num_points, 1))
+    y = random.randint(0, height - 1, (num_points, 1))
     points = np.concatenate((y, x), axis=-1).astype(np.int32)  # [num_points, 2]
     return points
+
 
 def postprocess_occlusions(occlusions, expected_dist):
     visibles = (1 - F.sigmoid(occlusions)) * (1 - F.sigmoid(expected_dist)) > 0.5
     return visibles
 
+
 def get_query_features(query_points: torch.Tensor,
                        feature_grid: torch.Tensor,
                        hires_feats_grid: torch.Tensor,
                        initial_resolution: tuple[int, int]) -> tuple[torch.Tensor, torch.Tensor]:
-
     position_in_grid = convert_grid_coordinates(
         query_points,
         initial_resolution,
@@ -188,6 +192,7 @@ def get_query_features(query_points: torch.Tensor,
     )
     return query_feats, hires_query_feats
 
+
 def draw_points(frame, points, visible, colors):
     for i in range(points.shape[0]):
         if not visible[i]:
@@ -196,4 +201,27 @@ def draw_points(frame, points, visible, colors):
         point = points[i, :]
         color = colors[i, :].astype(np.uint8).tolist()
         cv2.circle(frame, (int(point[0]), int(point[1])), 3, color, -1)
+    return frame
+
+
+def draw_tracks(frame, tracks, point_colors):
+    # tracks is [num_points, track_length, 2]
+
+    # At the beginning tracks are all zeros, in the first frame only the first track id is filled, calculate the number of valid tracks
+    full_empty = np.all(tracks == 0, axis=0)[:, 1]
+    num_valid_tracks = np.sum(~full_empty)
+
+    if num_valid_tracks < 2:
+        return frame
+
+    # Get which points have all valid values over the track length
+    full_visible = np.all(tracks != -1, axis=1)[:, 1]
+    full_visible_tracks = tracks[full_visible]
+
+    visible_colors = point_colors[full_visible]
+
+    for track, color in zip(full_visible_tracks, visible_colors):
+        color = color.astype(np.uint8).tolist()
+        for i in range(1, num_valid_tracks):
+            cv2.line(frame, tuple(track[i - 1].astype(int)), tuple(track[i].astype(int)), color, 2)
     return frame
