@@ -41,8 +41,8 @@ class TapirPointEncoder(nn.Module):
         self.model = model
 
     @torch.inference_mode()
-    def forward(self, query_points, feature_grid, hires_feats_grid, initial_resolution):
-        return get_query_features(query_points, feature_grid, hires_feats_grid, initial_resolution)
+    def forward(self, query_points, feature_grid, hires_feats_grid):
+        return get_query_features(query_points, feature_grid, hires_feats_grid)
 
 
 class TapirInference(nn.Module):
@@ -61,6 +61,9 @@ class TapirInference(nn.Module):
         self.hires_query_feats = torch.zeros((1, self.num_points, 128), dtype=torch.float32, device=self.device)
 
     def set_points(self, frame: np.ndarray, query_points: np.ndarray):
+        query_points = query_points.astype(np.float32)
+        query_points[..., 0] = query_points[..., 0] / self.input_resolution[1]
+        query_points[..., 1] = query_points[..., 1] / self.input_resolution[0]
 
         query_points = torch.tensor(query_points).to(self.device)
 
@@ -73,7 +76,7 @@ class TapirInference(nn.Module):
         input_frame = preprocess_frame(frame, resize=self.input_resolution, device=self.device)
         _, _, _, feature_grid, hires_feats_grid = self.predictor(input_frame, query_feats, hires_query_feats, self.causal_state)
 
-        self.query_feats, self.hires_query_feats = self.encoder(query_points[None], feature_grid, hires_feats_grid, self.input_resolution)
+        self.query_feats, self.hires_query_feats = self.encoder(query_points[None], feature_grid, hires_feats_grid)
 
     @torch.inference_mode()
     def forward(self, frame: np.ndarray):

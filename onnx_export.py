@@ -65,7 +65,7 @@ if __name__ == '__main__':
                         (query_points[None], feature_grid, hires_feats_grid, input_resolution),
                         f'{output_dir}/tapir_pointencoder.onnx',
                         verbose=True,
-                        input_names=['query_points', 'feature_grid', 'hires_feats_grid', 'input_resolution'],
+                        input_names=['query_points', 'feature_grid', 'hires_feats_grid'],
                         output_names=['query_feats', 'hires_query_feats'],
                         dynamic_axes=encode_dynamic)
 

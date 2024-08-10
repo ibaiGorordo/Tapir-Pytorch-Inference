@@ -184,17 +184,16 @@ def postprocess_occlusions(occlusions, expected_dist):
 
 def get_query_features(query_points: torch.Tensor,
                        feature_grid: torch.Tensor,
-                       hires_feats_grid: torch.Tensor,
-                       initial_resolution: tuple[int, int]) -> tuple[torch.Tensor, torch.Tensor]:
+                       hires_feats_grid: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     position_in_grid = convert_grid_coordinates(
         query_points,
-        initial_resolution,
+        (1,1),
         feature_grid.shape[1:3]
     )
 
     position_in_grid_hires = convert_grid_coordinates(
         query_points,
-        initial_resolution,
+        (1,1),
         hires_feats_grid.shape[1:3]
     )
 
