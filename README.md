@@ -29,7 +29,7 @@ Arguments:
  - **--resolution**: Input resolution (default: 640)
  - **--num_points**: Number of points (default: 1000)
  - **--dynamic**: Export with dynamic number of points (default: False)
- - **--num_iters**: Number of iterations, use 1 for faster inference, 4 for better results (default: 4)
+ - **--num_iters**: Number of iterations, use 0 for faster inference, 4 for better results (default: 4)
  - **--output_dir**: Output directory (default: ./)
 
 # Examples
