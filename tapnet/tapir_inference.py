@@ -52,7 +52,6 @@ class TapirInference(nn.Module):
         self.predictor = TapirPredictor(self.model).to(device)
         self.encoder = TapirPointEncoder(self.model).to(device)
         self.device = device
-        self.input_resolution = input_resolution
 
         self.num_points = 256
         causal_state_shape = (num_pips_iter, self.model.num_mixer_blocks, self.num_points, 2, 512 + 2048)

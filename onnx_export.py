@@ -39,11 +39,10 @@ if __name__ == '__main__':
     feature_grid = torch.zeros((1, resolution//8, resolution//8, 256), dtype=torch.float32, device=device)
     hires_feats_grid = torch.zeros((1, resolution//4, resolution//4, 128), dtype=torch.float32, device=device)
     query_points = torch.zeros((num_points, 2), dtype=torch.float32, device=device)
-    input_resolution = torch.tensor((resolution, resolution)).to(device)
     input_frame = torch.zeros((1, 3, resolution, resolution), dtype=torch.float32, device=device)
 
     # Test model
-    query_feats, hires_query_feats = encoder(query_points[None], feature_grid, hires_feats_grid, input_resolution)
+    query_feats, hires_query_feats = encoder(query_points[None], feature_grid, hires_feats_grid)
     tracks, visibles, causal_state, _, _ = predictor(input_frame, query_feats, hires_query_feats, causal_state)
 
     encode_dynamic = None
@@ -62,7 +61,7 @@ if __name__ == '__main__':
 
     # Export model
     torch.onnx.export(encoder,
-                        (query_points[None], feature_grid, hires_feats_grid, input_resolution),
+                        (query_points[None], feature_grid, hires_feats_grid),
                         f'{output_dir}/tapir_pointencoder.onnx',
                         verbose=True,
                         input_names=['query_points', 'feature_grid', 'hires_feats_grid'],
