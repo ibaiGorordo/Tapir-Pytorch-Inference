@@ -41,5 +41,5 @@ Arguments:
  python example_webcam_tracking.py
  ```
 
-# References:
+## References:
 * **TAPIR Repository:** [https://github.com/google-deepmind/tapnet/tree/main](https://github.com/google-deepmind/tapnet/tree/main)
