@@ -7,7 +7,7 @@ This is a strip down version of the original Tapir repository focused on inferen
 - Removed the JAX dependencies and the training code.
 - Make it easy to run in real-time even with a camera feed.
 - Converted tensors from 5D to 4D (only use one frame)
-- Create models to simplify ONNX export
+- ⚠️⚠️⚠️**ONNX Inference is very slow**⚠️⚠️⚠️
 
 ## Installation
 ```shell
@@ -20,6 +20,7 @@ pip install -r requirements.txt
 The License of the original model is Apache 2.0: [License](https://github.com/google-deepmind/tapnet/blob/main/LICENSE)
 
 ## ONNX Export
+⚠️⚠️⚠️**ONNX Inference is very slow**⚠️⚠️⚠️
 ```shell    
 python onnx_export.py
 ```
