@@ -16,6 +16,9 @@ cd Tapir-Pytorch-Inference
 pip install -r requirements.txt
 ```
 
+## License
+The License of the original model is Apache 2.0: [License](https://github.com/google-deepmind/tapnet/blob/main/LICENSE)
+
 ## ONNX Export
 ```shell    
 python onnx_export.py
