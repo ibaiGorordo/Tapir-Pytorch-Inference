@@ -5,9 +5,9 @@
 ## Important
 This is a strip down version of the original Tapir repository focused on inference.
 - Removed the JAX dependencies and the training code.
+- Make it easy to run in real-time even with a camera feed.
 - Converted tensors from 5D to 4D (only use one frame)
 - Create models to simplify ONNX export
-- Add onnx export script
 
 ## Installation
 ```shell
