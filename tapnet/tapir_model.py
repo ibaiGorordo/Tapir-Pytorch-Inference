@@ -104,13 +104,13 @@ class TAPIR(nn.Module):
         latent = latent / torch.sqrt(
             torch.maximum(
                 torch.sum(torch.square(latent), dim=-1, keepdim=True),
-                torch.tensor(1e-12, device=latent.device),
+                torch.full((), 1e-12, device=latent.device),
             )
         )
         hires = hires / torch.sqrt(
             torch.maximum(
                 torch.sum(torch.square(hires), dim=-1, keepdim=True),
-                torch.tensor(1e-12, device=hires.device),
+                torch.full((), 1e-12, device=hires.device),
             )
         )
 

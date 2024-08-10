@@ -142,29 +142,34 @@ class PIPsConvBlock(nn.Module):
         )
         self.conv_channels_mixer = ConvChannelsMixer(in_channels)
 
-    def forward(self, x, causal_context):
-        to_skip = x
+    def process_step1(self, x, causal_context_1):
         x = self.layer_norm(x)
-        x = torch.cat([causal_context[...,:self.step1_size], x], dim=-2)
+        x = torch.cat([causal_context_1, x], dim=-2)
         new_causal_context = x[..., -(self.kernel_shape - 1):, :]
         x = x.permute(0, 2, 1)
         x = F.pad(x, (2, 0))
         x = self.mlp1_up(x)
         x = F.gelu(x, approximate='tanh')
+        return x, new_causal_context
 
+    def process_step2(self, x, causal_context_2, new_causal_context):
         x = x.permute(0, 2, 1)
-        num_extra = causal_context.shape[-2]
-        x = torch.cat([causal_context[...,self.step1_size:], x[..., num_extra:, :]], dim=-2)
+        num_extra = causal_context_2.shape[-2]
+        x = torch.cat([causal_context_2, x[..., num_extra:, :]], dim=-2)
         new_causal_context = torch.cat([new_causal_context, x[..., -(self.kernel_shape - 1):, :]], dim=-1)
         x = x.permute(0, 2, 1)
 
         x = F.pad(x, (2, 0))
         x = self.mlp1_up_1(x)
         x = x.permute(0, 2, 1)
-
         x = x[..., num_extra:, :]
+        x = x.view(*x.shape[:-1], -1, 4).sum(dim=-1)
+        return x, new_causal_context
 
-        x = x[..., 0::4] + x[..., 1::4] + x[..., 2::4] + x[..., 3::4]
+    def forward(self, x, causal_context_1, causal_context_2):
+        to_skip = x
+        x, new_causal_context = self.process_step1(x, causal_context_1)
+        x, new_causal_context = self.process_step2(x, causal_context_2, new_causal_context)
 
         x = x + to_skip
         to_skip = x
@@ -222,14 +227,15 @@ class PIPSMLPMixer(nn.Module):
 
     def forward(self, x, causal_context):
         x = self.linear(x)
-        all_causal_context = causal_context.clone()
+        step1_size = self.blocks[0].step1_size
+        causal_context1 = causal_context[..., :step1_size]
+        causal_context2 = causal_context[..., step1_size:]
         for i, block in enumerate(self.blocks):
-            x, new_causal_context = block(x, causal_context[i,...])
-            all_causal_context[i,...] = new_causal_context
+            x, causal_context[i,...] = block(x, causal_context1[i,...], causal_context2[i,...])
 
         x = self.layer_norm(x)
         x = self.linear_1(x)
-        return x, all_causal_context
+        return x, causal_context
 
 
 class BlockV2(nn.Module):

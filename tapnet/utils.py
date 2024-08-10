@@ -103,7 +103,7 @@ def soft_argmax_heatmap_batched(softmax_val, threshold=5):
 
     sum_of_weights = torch.maximum(
         torch.sum(valid * softmax_val[:, :, :, :, None], dim=(2, 3)),
-        torch.tensor(1e-12, device=softmax_val.device),
+        torch.full((), 1e-12, device=softmax_val.device),
     )
     return weighted_sum / sum_of_weights
 
@@ -250,4 +250,4 @@ def draw_tracks(frame, tracks, point_colors, draw_static=False):
         for i in range(1, num_valid_tracks):
             cv2.line(draw_image, tuple(track[i - 1].astype(int)), tuple(track[i].astype(int)), color, line_thickness)
 
-    return cv2.addWeighted(draw_image, 0.5, frame, 0.5, 0)
+    return cv2.addWeighted(draw_image, 0.4, frame, 0.6, 0)
