@@ -14,6 +14,7 @@ def get_parser():
     parser.add_argument("--resolution", default=640, type=int, help="Input resolution")
     parser.add_argument("--num_points", default=1000, type=int, help="Number of points")
     parser.add_argument("--num_iters", default=4, type=int, help="Number of iterations, 1 for faster inference, 4 for better results")
+    parser.add_argument("--output_dir", default="./", type=str, help="Output ONNX file")
     return parser
 
 
@@ -21,12 +22,13 @@ if __name__ == '__main__':
     parser = get_parser()
     args = parser.parse_args()
 
+    model_path = args.model
     resolution = args.resolution
     num_points = args.num_points
     num_iters = args.num_iters
+    output_dir = args.output_dir
 
-    model = build_model('models/causal_bootstapir_checkpoint.pt',
-                        (resolution, resolution), num_iters, True, device).eval()
+    model = build_model(model_path,(resolution, resolution), num_iters, True, device).eval()
     predictor = TapirPredictor(model).to(device).eval()
     encoder = TapirPointEncoder(model).to(device).eval()
 
@@ -45,24 +47,24 @@ if __name__ == '__main__':
     # Export model
     torch.onnx.export(encoder,
                         (query_points[None], feature_grid, hires_feats_grid, input_resolution),
-                        'tapir_pointencoder.onnx',
+                        f'{output_dir}/tapir_pointencoder.onnx',
                         verbose=True,
                             input_names=['query_points', 'feature_grid', 'hires_feats_grid', 'input_resolution'],
                             output_names=['query_feats', 'hires_query_feats'])
 
     torch.onnx.export(predictor,
                       (input_frame, query_feats, hires_query_feats, causal_state),
-                      'tapir.onnx',
+                      f'{output_dir}/tapir.onnx',
                       verbose=True,
                         input_names=['input_frame', 'query_feats', 'hires_query_feats', 'causal_state'],
                         output_names=['tracks', 'visibles', 'causal_state', 'feature_grid', 'hires_feats_grid'])
 
     # Simplify model
-    model_simp, check = simplify('tapir_pointencoder.onnx')
-    onnx.save(model_simp, 'tapir_pointencoder.onnx')
+    model_simp, check = simplify(f'{output_dir}/tapir_pointencoder.onnx')
+    onnx.save(model_simp, f'{output_dir}/tapir_pointencoder.onnx')
 
-    model_simp, check = simplify('tapir.onnx')
-    onnx.save(model_simp, 'tapir.onnx')
+    model_simp, check = simplify(f'{output_dir}/tapir.onnx')
+    onnx.save(model_simp, f'{output_dir}/tapir.onnx')
 
 
 
