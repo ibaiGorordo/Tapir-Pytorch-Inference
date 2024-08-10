@@ -2,3 +2,6 @@ torch
 torchvision
 opencv-python
 cap_from_youtube
+onnxruntime
+onnx
+onnxsim
