@@ -93,6 +93,7 @@ class TAPIR(nn.Module):
         else:
             self.extra_convs = None
 
+        self.avg_pool = nn.AvgPool2d(kernel_size=(2, 2), stride=(2, 2), padding=0)
 
     def get_feature_grids(self,frame: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         resnet_out = self.resnet_torch(frame)
@@ -144,12 +145,14 @@ class TAPIR(nn.Module):
                    + self.initial_resolution
                    + (3,),
         )
+        feature_grid_perm = feature_grid.permute(0, 3, 1, 2)
         new_causal_context = []
         mixer_feats = None
         for i in range(num_iters):
 
             queries = [hires_query_feats, query_feats, query_feats]
-            feature_grid_avg = F.avg_pool3d(feature_grid, kernel_size=(2, 2, 1), stride=(2, 2, 1), padding=0)
+            feature_grid_avg = self.avg_pool(feature_grid_perm)
+            feature_grid_avg = feature_grid_avg.permute(0, 2, 3, 1)
             pyramid = [hires_feats_grid, feature_grid, feature_grid_avg]
 
             refined = self.refine_pips(
