@@ -20,7 +20,7 @@ class TapirPredictor(nn.Module):
         super().__init__()
         self.model = model
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def forward(self, frame, query_feats, hires_query_feats, causal_context):
         feature_grid, hires_feats_grid = self.model.get_feature_grids(frame)
 
@@ -40,7 +40,7 @@ class TapirPointEncoder(nn.Module):
         super().__init__()
         self.model = model
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def forward(self, query_points, feature_grid, hires_feats_grid):
         return get_query_features(query_points, feature_grid, hires_feats_grid)
 
@@ -52,6 +52,7 @@ class TapirInference(nn.Module):
         self.predictor = TapirPredictor(self.model).to(device)
         self.encoder = TapirPointEncoder(self.model).to(device)
         self.device = device
+        self.input_resolution = input_resolution
 
         self.num_points = 256
         causal_state_shape = (num_pips_iter, self.model.num_mixer_blocks, self.num_points, 2, 512 + 2048)
@@ -77,7 +78,7 @@ class TapirInference(nn.Module):
 
         self.query_feats, self.hires_query_feats = self.encoder(query_points[None], feature_grid, hires_feats_grid)
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def forward(self, frame: np.ndarray):
         height, width = frame.shape[:2]
 
