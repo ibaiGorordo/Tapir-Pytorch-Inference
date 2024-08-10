@@ -14,15 +14,29 @@
 # ==============================================================================
 
 """Pytorch model utilities."""
-
-from typing import Any, Sequence, Union
+import colorsys
+from typing import Sequence
 import numpy as np
 import cv2
 import torch
 import torch.nn.functional as F
 
-random = np.random.RandomState(2)
+random = np.random.RandomState(0)
 
+# Generate random colormaps for visualizing different points.
+def get_colors(num_colors: int) -> np.ndarray:
+    """Gets colormap for points."""
+    colors = []
+    for i in np.arange(0.0, 360.0, 360.0 / num_colors):
+        hue = i / 360.0
+        lightness = (50 + np.random.rand() * 10) / 100.0
+        saturation = (90 + np.random.rand() * 10) / 100.0
+        color = colorsys.hls_to_rgb(hue, lightness, saturation)
+        colors.append(
+            (int(color[0] * 255), int(color[1] * 255), int(color[2] * 255))
+        )
+    # random.shuffle(colors)
+    return np.array(colors)
 
 def map_coordinates_2d(feats: torch.Tensor, coordinates: torch.Tensor) -> torch.Tensor:
     x = feats.permute(0, 3, 1, 2)
@@ -194,34 +208,46 @@ def get_query_features(query_points: torch.Tensor,
 
 
 def draw_points(frame, points, visible, colors):
+
+    point_size = min(frame.shape[0], frame.shape[1]) // 300
+
     for i in range(points.shape[0]):
         if not visible[i]:
             continue
 
         point = points[i, :]
         color = colors[i, :].astype(np.uint8).tolist()
-        cv2.circle(frame, (int(point[0]), int(point[1])), 3, color, -1)
+        cv2.circle(frame, (int(point[0]), int(point[1])), point_size, color, -1)
     return frame
 
 
-def draw_tracks(frame, tracks, point_colors):
-    # tracks is [num_points, track_length, 2]
+def draw_tracks(frame, tracks, point_colors, draw_static=False):
+
+    draw_image = frame.copy()
+
+    line_thickness = min(draw_image.shape[0], draw_image.shape[1]) // 300
 
     # At the beginning tracks are all zeros, in the first frame only the first track id is filled, calculate the number of valid tracks
     full_empty = np.all(tracks == 0, axis=0)[:, 1]
     num_valid_tracks = np.sum(~full_empty)
 
     if num_valid_tracks < 2:
-        return frame
+        return draw_image
 
     # Get which points have all valid values over the track length
-    full_visible = np.all(tracks != -1, axis=1)[:, 1]
+    full_visible = np.all(tracks[:, :num_valid_tracks,:] > 0, axis=1)[:, 1]
     full_visible_tracks = tracks[full_visible]
-
     visible_colors = point_colors[full_visible]
+
+    if not draw_static:
+        # Get the points that have not moved during the track length, less than 5 pixels
+        static_points = np.all(np.abs(np.diff(full_visible_tracks[:, :num_valid_tracks,:], axis=1)) < 2, axis=1)[:, 1]
+        full_visible_tracks = full_visible_tracks[~static_points]
+        visible_colors = visible_colors[~static_points]
 
     for track, color in zip(full_visible_tracks, visible_colors):
         color = color.astype(np.uint8).tolist()
         for i in range(1, num_valid_tracks):
-            cv2.line(frame, tuple(track[i - 1].astype(int)), tuple(track[i].astype(int)), color, 2)
-    return frame
+            cv2.line(draw_image, tuple(track[i - 1].astype(int)), tuple(track[i].astype(int)), color, line_thickness)
+
+    return cv2.addWeighted(draw_image, 0.5, frame, 0.5, 0)
