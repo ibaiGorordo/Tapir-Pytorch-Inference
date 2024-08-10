@@ -32,7 +32,7 @@ if __name__ == '__main__':
     # Reset video to the beginning
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_time* cap.get(cv2.CAP_PROP_FPS))
 
-    out = cv2.VideoWriter('output.mp4', cv2.VideoWriter_fourcc(*'mp4v'), cap.get(cv2.CAP_PROP_FPS), (int(cap.get(3)), int(cap.get(4))))
+    # out = cv2.VideoWriter('output.mp4', cv2.VideoWriter_fourcc(*'mp4v'), cap.get(cv2.CAP_PROP_FPS), (int(cap.get(3)), int(cap.get(4))))
 
     track_length = 30
     tracks = np.zeros((num_points, track_length, 2), dtype=object)
@@ -53,8 +53,9 @@ if __name__ == '__main__':
         # Draw the results
         frame = utils.draw_tracks(frame, tracks, point_colors)
         frame = utils.draw_points(frame, points, visibles, point_colors)
-
-        out.write(frame)
         cv2.imshow('frame', frame)
+
+        # out.write(frame)
+
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
