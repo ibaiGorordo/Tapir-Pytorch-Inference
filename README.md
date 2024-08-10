@@ -18,13 +18,14 @@ pip install -r requirements.txt
 
 ## ONNX Export
 ```shell    
-python export_onnx.py
+python onnx_export.py
 ```
 
 Arguments:
  - **--model**: Path to the model weights
  - **--resolution**: Input resolution (default: 640)
  - **--num_points**: Number of points (default: 1000)
+ - **--dynamic**: Export with dynamic number of points (default: False)
  - **--num_iters**: Number of iterations, use 1 for faster inference, 4 for better results (default: 4)
  - **--output_dir**: Output directory (default: ./)
 
