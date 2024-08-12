@@ -1,6 +1,5 @@
 # Tapir Pytorch Inference
-
-![!Tapir Pytorch Inference](https://github.com/ibaiGorordo/Tapir-Pytorch-Inference/raw/main/doc/img/tapir_video.gif)
+https://github.com/user-attachments/assets/457eeb57-9961-4022-9b15-55f1d9dc2260
 
 ## Important
 This is a strip down version of the original Tapir repository focused on inference.
