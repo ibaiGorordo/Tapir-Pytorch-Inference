@@ -146,7 +146,7 @@ class TAPIR(nn.Module):
                    + (3,),
         )
         feature_grid_perm = feature_grid.permute(0, 3, 1, 2)
-        new_causal_context = []
+        new_causal_context = causal_context
         mixer_feats = None
         for i in range(num_iters):
 
@@ -167,11 +167,9 @@ class TAPIR(nn.Module):
             )
 
             points, occlusion, expected_dist, mixer_feats, cc = refined
-            new_causal_context.append(cc)
+            new_causal_context[i,...] = cc
 
-        new_causal_context = torch.cat(new_causal_context, dim=0)
-
-        return points, occlusion, expected_dist, new_causal_context
+        return points, occlusion, expected_dist, causal_context
 
     def refine_pips(self, target_feature, pyramid,
                     pos_guess, occ_guess, expd_guess,
