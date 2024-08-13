@@ -16,7 +16,7 @@ if __name__ == '__main__':
     # Initialize video
     # cap = cv2.VideoCapture("input.mp4")
     videoUrl = 'https://youtu.be/lOSgQxG_uqQ?si=QN8YiTFWbD4wnsS5'
-    cap = cap_from_youtube(videoUrl)
+    cap = cap_from_youtube(videoUrl, resolution="1080p")
     start_time = 0 # skip first {start_time} seconds
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_time * cap.get(cv2.CAP_PROP_FPS))
 
